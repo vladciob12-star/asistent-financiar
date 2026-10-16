@@ -1,41 +1,71 @@
-# Pregătirea integrărilor
+# Starea integrărilor și cerințe
 
-## Ce funcționează acum
+Evaluare din 16 octombrie 2026. Documentația cloud completă și comparația costurilor: docs/cloud-readiness.md.
 
-- **Creasoft vending:** importul local folosește antetele din prototipul arhivei și agregă vânzările pe vendomat. Exportul folosit în producție trebuie comparat cu schema reală din cont înainte de a considera reconcilierea validată.
-- Agregatul CSV poate fi importat în SQLite cu `python main.py --import-creasoft-report raport.csv --database data/finante.sqlite3`. Sunt mapate doar aliasurile explicite pentru Oradea Era și Crișul Shopping Center Oradea; etichetele necunoscute rămân `unassigned` pentru verificare. Importul păstrează suma combinată cash + non-cash ca vânzări raportate, nu ca sold de numerar fizic. Dacă perioada nu este prezentă, raportul apare separat ca perioadă necunoscută și nu intră în totalurile lunare.
-- **Extrase bancare și exporturi Booking.com:** `financial_imports.py` importă CSV/XLSX numai după o mapare explicită a antetelor, datei, monedei și separatorului. CLI poate salva registrul normalizat CSV și, opțional, observațiile într-o bază SQLite locală cu proveniența fișier/rând. Fără mapări explicite de categorie/stare, înregistrările rămân neclasificate. Totalurile lunare CSV sunt separate pe monedă.
-- **Raport financiar Booking CSV localizat:** `booking_imports.py` recunoaște antetele efectiv examinate, citește separat valoarea rezervării, comisionul, taxele, suma netă și plata, iar referința rezervării este stocată numai ca hash. Importul se face cu `python main.py --import-booking-report raport.csv --database data/finante.sqlite3`. Rândurile payout sunt creanțe raportate, nu încasări bancare. Potrivirea cu o tranzacție bancară este doar propunere până la confirmarea manuală. Fișierul poate include exporturi după versiune și localizare; exporturi cu alte antete sunt respinse intenționat și trebuie adăugate cu teste.
-- Datele nu sunt trimise nicăieri. Importurile nu deduc monede, date, categorii, proprietăți sau semantica unei sume.
+## Funcții active în cod
 
-Exemplu de utilizare după completarea mapării cu antetele unui export real:
+- Creasoft: import manual CSV cu agregate pe automat; perioada lipsă nu este dedusă, iar cash + non-cash nu sunt tratate ca numerar.
+- Booking.com: import manual CSV localizat; payout-urile sunt observații de creanță până la potrivirea și confirmarea manuală.
+- Banca: import exclusiv manual CSV/XLSX cu mapare explicită. Nu se cer date de autentificare bancară și nu există conexiune PSD2/Open Banking.
+- SQLite: registru local persistent în calea configurată. Pentru cloud calea trebuie montată pe volumul persistent.
+- Cloud: imagine Docker, profil Render, autentificare cloud, health check și utilitar de backup criptat sunt pregătite, dar nu au fost deployate sau activate.
 
-```powershell
-python main.py --import-file cale\extras.xlsx --mapping config\mapare.json --export outputs\registru.csv --monthly-export outputs\totaluri-lunare.csv --database data\finante.sqlite3
-```
+## Cloud și protecția datelor
 
-`config/csv-mapping.template.json` este doar o structură goală, nu o mapare Booking.com sau bancară și nu conține date de exemplu. Se copiază, apoi se completează folosind antetele și formatul observate în fișierul real. Exporturile pot conține date personale; păstrează-le local și exclude-le din Git.
+- În modul local, serverul ascultă doar pe loopback și poate fi folosit fără login suplimentar.
+- Pentru bind public, aplicația refuză pornirea fără hash PBKDF2 și salt de parolă, URL public HTTPS și cookie securizat. După login, cookie-ul este HttpOnly, SameSite=Strict, expiră după 12 ore și sesiunea expiră la repornirea procesului.
+- Fișierele CSV/XLSX sunt procesate temporar; registrul păstrează câmpurile normalizate și hash-ul fișierului. Logurile HTTP sunt dezactivate.
+- Baza SQLite nu este criptată de aplicație. În profilul Render, discul providerului este criptat în repaus și snapshot-urile sunt criptate. În alți furnizori, trebuie configurată și verificată separat criptarea volumului.
+- Utilitarul scripts/backup_database.py creează backup SQLite consistent, apoi îl criptează AES-256-GCM. Cheia trebuie păstrată separat; nu se copiază în Git și nu există upload/scheduler automat.
 
-## Limitele integrărilor directe
+## Integrare WhatsApp Business oficială
 
-- **Creasoft:** documentația oficială disponibilă descrie exporturi Excel de rapoarte financiare cu echipament, cantitate vândută, încasări reale și numerar colectat. Nu demonstrează însă un API public pentru sincronizare vending. Până când Creasoft confirmă accesul API pentru produsul și contul titularului, Excel/CSV exportat este alternativa sigură. Antetele și perioada trebuie validate pe un export real, anonimizat; documentul public este vechi și nu garantează schema contului actual.
-- **Booking.com:** Connectivity API este pentru Connectivity Partners. Accesul cere machine account cu autentificare token-based, proprietatea legată la cont, accesul endpointului, tipul de conexiune potrivit și eventual certificarea cerută. Autentificarea credential-based a fost retrasă la 31 decembrie 2025. Nu este o integrare generică activă pentru un cont de cazare; până la acordarea acestor permisiuni, importul rapoartelor financiare exportate rămâne alternativa. În sistemul de raportare, plata Booking este dovadă de creanță; încasarea devine confirmată numai prin extrasul bancar.
-- **WhatsApp Business Platform:** integrarea oficială se face prin Cloud API, Meta app, WhatsApp Business Account, număr de telefon autorizat și webhook public HTTPS. Endpointul trebuie să valideze handshake-ul webhook și semnătura cererilor, să verifice numărul expeditorului autorizat și să nu scrie payloaduri sau date financiare în loguri. Mesajele sunt tarifate conform ratei Meta aplicabile tipului și destinației; cont și număr nu au fost configurate, iar niciun mesaj nu a fost trimis.
-- **Bănci:** fiecare bancă poate exporta câmpuri, semne, monede și formate diferite. Versiunea curentă acceptă CSV cu mapare explicită. Nu presupune acces PSD2/Open Banking și nu cere date de autentificare. Suportul pentru un standard XML bancar se poate adăuga după identificarea formatului și versiunii dintr-un extras anonimizat.
+Canalul pregătit pentru o eventuală versiune viitoare este Meta WhatsApp Business Platform Cloud API, fără BSP terț. Activarea necesită cont Meta Business/developer, WABA, număr autorizat și înregistrat, token de sistem cu permisiuni potrivite, adresă webhook publică HTTPS și verificarea callback-ului/semnăturii Meta. Trebuie decis și verificat ce expeditori sunt autorizați.
 
-## Starea efectivă a funcțiilor
+Implementarea trebuie să valideze semnătura webhook, să respingă payloadurile nerecunoscute, să limiteze expeditorii și să evite logarea conținutului mesajelor. Nu ar trebui acceptate extrase bancare prin WhatsApp în această arhitectură; regula rămâne încărcarea manuală directă de către proprietar.
 
-Importul Booking CSV, importul agregatelor Creasoft în SQLite, registrul local, raportarea HTML, idempotenta importurilor și propunerea/confirmarea manuală a reconcilierii sunt testate local cu date sintetice. Nu a fost configurată nicio conexiune API Booking, Creasoft, bancă sau WhatsApp și nu este instalată o aplicație cloud. Importul specializat Booking și maparea generică sunt două căi de import distincte; nu importa același export pe ambele căi în aceeași evidență.
+Meta stabilește tariful după mesajul livrat, piață și categorie. Pagina oficială consultată descrie mesaje de marketing, utility, authentication și service și arată că unele răspunsuri service/utility au cost zero, dar tarifele și condițiile se pot schimba. Înainte de a trimite automat orice mesaj trebuie verificat rate card-ul curent pentru piața și categoria exactă și aprobat bugetul. Nicio trimitere nu este activă.
 
-## Referințe oficiale consultate
+## Creasoft
 
-- [Booking.com Connectivity APIs — overview and partner onboarding](https://developers.booking.com/connectivity/docs)
-- [Booking.com authentication](https://developers.booking.com/connectivity/docs/authentication)
-- [Booking.com endpoint/connection access](https://developers.booking.com/connectivity/docs/managing-endpoint-access)
-- [Booking.com token-based authentication](https://developers.booking.com/connectivity/docs/token-based-authentication)
-- [Creasoft — documentația rapoartelor financiare vending (PDF)](https://creasoft.ro/sites/default/files/2019-10/Modificare%20SITE%20ver%205.pdf)
-- [Meta — WhatsApp Business Platform pricing](https://business.whatsapp.com/products/platform-pricing)
-- [Meta-hosted WhatsApp Node.js SDK — webhook verification](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/webhooks/start/)
-- [Railway Hobby plan](https://docs.railway.com/pricing/plans), [Render pricing](https://render.com/pricing), [Cloudflare Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+Pagina oficială Creasoft descrie un API gratuit pentru integrarea payroll/ERP, cu sincronizare de angajați, evenimente și sumarizări, plus import/export Excel. Menționează separat telemetrie pentru vending, dar nu publică un contract API de rapoarte financiare vending. API-ul HR nu se presupune automat compatibil cu rapoartele vending.
 
-Aceste referințe sunt context pentru limitele tehnice; nu confirmă că un API sau un export anume este activ pentru contul utilizatorului.
+Pentru o automatizare read-only trebuie cerute Creasoft: endpoint și schema contului concret, permisiuni, intervale, limitări, cost/contract și definiția totalurilor cash/non-cash. Până la confirmarea lor, importul CSV existent este singura cale disponibilă.
+
+## Booking.com
+
+Connectivity API este destinat partenerilor Connectivity și proprietăților conectate. E nevoie de aprobare/onboarding, machine account și token, legarea proprietății și activarea endpointurilor necesare. Credential-based auth a fost retrasă la 31 decembrie 2025; integrarea nouă folosește token-uri cu durată limitată.
+
+Payments API oferă payout/reconciliere pe rezervare doar proprietăților care folosesc Payments by Booking.com și au implementat Reservations API. Reconciliation API poate genera rapoarte payout. Aceste valori pot fi importate automat după autorizare, dar nu dovedesc că banii au intrat în cont: reconcilierea cu banca rămâne dependentă de extrasul importat manual.
+
+## Separarea automatizării și aprobărilor
+
+### Se poate automatiza fără acces la servicii terțe
+
+- Inițializarea bazei la pornire, health check și persistența SQLite pe volumul configurat.
+- Deduplicarea fișierelor importate, totalurile lunare, PDF-ul și propunerile de reconciliere.
+- Crearea sau restaurarea unei copii criptate atunci când proprietarul rulează utilitarul explicit.
+
+### Poate deveni automat după aprobare și configurare
+
+- Polling read-only pentru rapoarte Creasoft/Booking, după accesul oficial și testarea unei scheme anonimizate.
+- Webhook-uri WhatsApp după configurarea contului Meta, HTTPS, verificarea semnăturii și lista expeditorilor.
+- Programarea și transferul backup-urilor după alegerea destinației, retenției și custodei cheii.
+
+### Necesită aprobarea sau acțiunea proprietarului
+
+- Crearea unui serviciu cloud plătit, alegerea bugetului, domeniului și regiunii.
+- Introducerea secretelelor cloud și configurarea backup-urilor externe.
+- Autorizarea conturilor Creasoft, Booking sau Meta și alegerea datelor care pot fi preluate.
+- Orice mesaj WhatsApp outbound și orice cost Meta/BSP/cloud.
+- Clasificarea contabilă și confirmarea potrivirii dintre payout Booking și extras bancar.
+- Importul fiecărui extras bancar: rămâne exclusiv manual; nu se automatizează.
+
+## Referințe oficiale
+
+- Render: [prețuri](https://render.com/pricing), [discuri persistente](https://render.com/docs/disks), [plan gratuit](https://render.com/docs/free).
+- Fly.io: [prețuri actualizate 1 octombrie 2026](https://fly.io/pricing-update/).
+- Hetzner: [prețuri cloud după ajustarea din 15 iunie 2026](https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/).
+- Meta: [WhatsApp Business Platform pricing](https://whatsappbusiness.com/products/platform-pricing/), [Cloud API getting started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started).
+- Creasoft: [API și export/import](https://www.creasoft.ro/ro/control-access-made-in-romania).
+- Booking.com: [Connectivity API](https://developers.booking.com/connectivity/docs), [autentificare](https://developers.booking.com/connectivity/docs/authentication), [acces endpoint](https://developers.booking.com/connectivity/docs/managing-endpoint-access), [Payments API](https://developers.booking.com/connectivity/docs/payments-api/understanding-the-payments-api), [Reconciliation API](https://developers.booking.com/connectivity/docs/openapispecs/reconciliation-api/reconciliation-api-specification).
