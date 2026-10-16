@@ -111,6 +111,14 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(activity["EUR"]["expense"],"25.00")
         self.assertEqual(activity["EUR"]["estimated_result"],"-25.00")
 
+    def test_bank_received_totals_exclude_debits(self):
+        credit=Observation("bank","2026-09-01","Customer payment","100.00","RON",settlement="received",source_row=2)
+        debit=Observation("bank","2026-09-02","Supplier payment","-40.00","RON",settlement="received",source_row=2)
+        import_observations(self.db,"credits.csv",b"credits",[credit])
+        import_observations(self.db,"debits.csv",b"debits",[debit])
+        result=monthly_summary(self.db,"2026-09")
+        self.assertEqual(result["bank_received_totals"],[{"currency":"RON","amount":"100.00"}])
+
     def test_invalid_batch_rolls_back_everything(self):
         valid=Observation("bank","2026-09-01","A","2.00","RON",source_row=2)
         invalid=Observation("bank","bad date","B","3.00","RON",source_row=3)
