@@ -2,11 +2,13 @@ import tempfile
 import unittest
 import subprocess
 import sys
+import sqlite3
 from pathlib import Path
 
 from finance_store import (Observation, classify_observation, connect,
                            confirm_reconciliation, import_creasoft_report, import_observations,
-                           monthly_summary, write_html_report)
+                           monthly_summary, record_bank_balance, write_html_report, write_monthly_pdf_report)
+from scripts.backup_database import create_encrypted_backup, restore_encrypted_backup
 
 
 class LedgerTests(unittest.TestCase):
@@ -118,6 +120,65 @@ class LedgerTests(unittest.TestCase):
         import_observations(self.db,"debits.csv",b"debits",[debit])
         result=monthly_summary(self.db,"2026-09")
         self.assertEqual(result["bank_received_totals"],[{"currency":"RON","amount":"100.00"}])
+
+    def test_available_balance_is_manual_latest_per_currency_and_validated(self):
+        record_bank_balance(self.db, "1200.50", "ron", "2026-09-01")
+        record_bank_balance(self.db, "950.25", "RON", "2026-09-30")
+        record_bank_balance(self.db, "100.00", "EUR", "2026-09-20")
+        balances = monthly_summary(self.db, "2026-09")["bank_available_balances"]
+        self.assertEqual(balances, [
+            {"currency":"EUR","amount":"100.00","as_of":"2026-09-20"},
+            {"currency":"RON","amount":"950.25","as_of":"2026-09-30"},
+        ])
+        with self.assertRaises(ValueError):
+            record_bank_balance(self.db, "NaN", "RON", "2026-09-30")
+        with self.assertRaises(ValueError):
+            record_bank_balance(self.db, "not-a-number", "RON", "2026-09-30")
+        with self.assertRaises(ValueError):
+            record_bank_balance(self.db, "20", "EURO", "2026-09-30")
+        with self.assertRaises(ValueError):
+            record_bank_balance(self.db, "20", "RÖN", "2026-09-30")
+
+    def test_monthly_pdf_report_is_generated_and_has_no_spurious_financial_values(self):
+        row = Observation("bank", "2026-09-12", "Venit sintetic", "100.00", "RON", "shop", "income", "received", source_row=2)
+        import_observations(self.db, "synthetic.csv", b"synthetic-pdf", [row])
+        path = Path(self.tmp.name) / "reports" / "2026-09.pdf"
+        write_monthly_pdf_report(self.db, "2026-09", path)
+        data = path.read_bytes()
+        self.assertTrue(data.startswith(b"%PDF-"))
+        self.assertGreater(len(data), 1000)
+
+    def test_data_persists_after_reopening_database(self):
+        row = Observation("bank", "2026-09-12", "Synthetic", "25.00", "RON", source_row=2)
+        import_observations(self.db, "synthetic.csv", b"persistent-synthetic", [row])
+        self.db.close()
+        reopened = connect(Path(self.tmp.name) / "ledger.sqlite3")
+        try:
+            self.assertEqual(tuple(reopened.execute("SELECT description,amount FROM observations").fetchone()),
+                             ("Synthetic", "25.00"))
+        finally:
+            reopened.close()
+
+    def test_encrypted_backup_round_trip_and_authentication(self):
+        row = Observation("bank", "2026-09-12", "PRIVATE-SYNTHETIC-MARKER", "25.00", "RON", source_row=2)
+        import_observations(self.db, "synthetic.csv", b"encrypted-synthetic", [row])
+        source = Path(self.tmp.name) / "ledger.sqlite3"
+        self.db.close()
+        key = bytes(range(32))
+        backup = Path(self.tmp.name) / "backups" / "ledger.afpb"
+        create_encrypted_backup(source, backup, key)
+        payload = backup.read_bytes()
+        self.assertTrue(payload.startswith(b"AFPB1"))
+        self.assertNotIn(b"PRIVATE-SYNTHETIC-MARKER", payload)
+        restored = Path(self.tmp.name) / "restored.sqlite3"
+        restore_encrypted_backup(backup, restored, key)
+        db = connect(restored)
+        try:
+            self.assertEqual(db.execute("SELECT description FROM observations").fetchone()[0], "PRIVATE-SYNTHETIC-MARKER")
+        finally:
+            db.close()
+        with self.assertRaises(Exception):
+            restore_encrypted_backup(backup, Path(self.tmp.name) / "wrong.sqlite3", b"x" * 32)
 
     def test_invalid_batch_rolls_back_everything(self):
         valid=Observation("bank","2026-09-01","A","2.00","RON",source_row=2)

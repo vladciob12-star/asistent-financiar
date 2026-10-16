@@ -11,7 +11,7 @@ import sqlite3
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS reports (
  id INTEGER PRIMARY KEY, period TEXT NOT NULL, generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'generated'
 );
+CREATE TABLE IF NOT EXISTS bank_balances (
+ id INTEGER PRIMARY KEY, currency TEXT NOT NULL, amount TEXT NOT NULL,
+ as_of TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS bank_balances_currency_date_idx ON bank_balances(currency,as_of,id);
 """
 
 
@@ -310,10 +315,15 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
             sums[item['currency']]=sums.get(item['currency'],Decimal(0))+Decimal(item['amount'])
         return [{"currency":currency,"amount":format(amount,'.2f')} for currency,amount in sorted(sums.items())]
     unclassified=[dict(r) for r in rows if r["kind"] in {"unclassified","unassigned"}]
+    balances = db.execute("""SELECT b.currency,b.amount,b.as_of FROM bank_balances b
+        WHERE NOT EXISTS (SELECT 1 FROM bank_balances newer WHERE newer.currency=b.currency
+          AND (newer.as_of>b.as_of OR (newer.as_of=b.as_of AND newer.id>b.id)))
+        ORDER BY b.currency""").fetchall()
     return {"period":month,"activities":{activity:{currency:{k:format(v,'.2f') for k,v in value.items()} |
         {"estimated_result":format(value['income']-value['expense']-value['commission'],'.2f')}
         for currency,value in currencies.items()} for activity,currencies in totals.items()},
-        "bank_received_totals":currency_totals(bank_rows),"booking_receivables_not_cash":currency_totals(outstanding_rows),
+        "bank_received_totals":currency_totals(bank_rows),"bank_available_balances":[dict(row) for row in balances],
+        "booking_receivables_not_cash":currency_totals(outstanding_rows),
         "booking_reported_payouts_not_bank_confirmed":currency_totals(booking_payout_rows),
         "unclassified":unclassified,
         "creasoft_reports_without_period":[dict(r) for r in db.execute(
@@ -322,6 +332,62 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
         "reconciliation_issues":[dict(r) for r in db.execute("SELECT * FROM reconciliations WHERE status='needs_review'").fetchall()] +
         [dict(r) for r in db.execute("SELECT * FROM booking_reconciliations WHERE status='needs_review'").fetchall()],
         "methodology":"Sunt însumate doar observațiile clasificate; plățile Booking programate nu sunt numerar, iar rezultatul este estimativ, nu profit contabil/fiscal."}
+
+
+def record_bank_balance(db: sqlite3.Connection, amount: str, currency: str, as_of: str) -> int:
+    """Record an explicitly user-entered statement balance, without a bank connection."""
+    try:
+        value = Decimal(amount)
+    except InvalidOperation as exc:
+        raise ValueError("Introdu un sold numeric valid.") from exc
+    currency = currency.strip().upper()
+    date.fromisoformat(as_of)
+    if not value.is_finite() or len(currency) != 3 or not currency.isascii() or not currency.isalpha():
+        raise ValueError("Introdu un sold numeric și un cod de monedă ISO din 3 litere.")
+    with db:
+        cur = db.execute("INSERT INTO bank_balances(currency,amount,as_of) VALUES(?,?,?)",
+                         (currency, format(value, "f"), as_of))
+    return cur.lastrowid
+
+
+def write_monthly_pdf_report(db: sqlite3.Connection, month: str, path: Path) -> None:
+    """Create a local monthly PDF with explicit caveats about estimates and balances."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    report = monthly_summary(db, month)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    styles = getSampleStyleSheet()
+    story = [Paragraph(f"Raport financiar lunar — {month}", styles["Title"]),
+             Paragraph("Valori agregate separat pe monedă. Rezultatul este estimativ, nu profit contabil sau fiscal.", styles["BodyText"]),
+             Spacer(1, 6 * mm)]
+    rows = [["Activitate", "Monedă", "Venituri", "Cheltuieli", "Comisioane", "Rezultat estimat"]]
+    for activity, currencies in sorted(report["activities"].items()):
+        for currency, values in sorted(currencies.items()):
+            rows.append([activity, currency, values["income"], values["expense"], values["commission"], values["estimated_result"]])
+    if len(rows) == 1:
+        rows.append(["Fără tranzacții clasificate", "—", "—", "—", "—", "—"])
+    table = Table(rows, repeatRows=1, colWidths=[42*mm, 17*mm, 23*mm, 23*mm, 23*mm, 30*mm])
+    table.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#17324d")),
+                               ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                               ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#d5dde5")),
+                               ("FONTSIZE", (0,0), (-1,-1), 8), ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+                               ("TOPPADDING", (0,0), (-1,-1), 6), ("VALIGN", (0,0), (-1,-1), "TOP")] ))
+    story.extend([table, Spacer(1, 6*mm), Paragraph("Bani disponibili (sold introdus manual din extras)", styles["Heading2"])])
+    balances = report["bank_available_balances"]
+    story.append(Paragraph("<br/>".join(f"{item['currency']}: {item['amount']} (la {item['as_of']})" for item in balances)
+                           if balances else "Necunoscut — introdu manual un sold din extrasul bancar.", styles["BodyText"]))
+    story.extend([Spacer(1, 4*mm), Paragraph("Încasări bancare în luna raportată", styles["Heading2"])])
+    received = report["bank_received_totals"]
+    story.append(Paragraph("<br/>".join(f"{item['currency']}: {item['amount']}" for item in received)
+                           if received else "Nu există încasări bancare clasificate pentru această lună.", styles["BodyText"]))
+    story.extend([Spacer(1, 4*mm), Paragraph("Creanțele Booking programate nu sunt bani disponibili. Rapoartele Creasoft fără perioadă validată nu sunt atribuite acestei luni. Datele rămân locale.", styles["BodyText"])])
+    SimpleDocTemplate(str(path), pagesize=A4, rightMargin=16*mm, leftMargin=16*mm,
+                      topMargin=16*mm, bottomMargin=16*mm, title=f"Raport financiar {month}").build(story)
 
 
 def write_html_report(db: sqlite3.Connection, month: str, path: Path) -> None:
@@ -350,3 +416,4 @@ def write_html_report(db: sqlite3.Connection, month: str, path: Path) -> None:
 
 def _escape(value: str) -> str:
     return value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;").replace("'","&#x27;")
+
