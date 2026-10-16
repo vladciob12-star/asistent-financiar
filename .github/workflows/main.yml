@@ -1,0 +1,22 @@
+name: Verificare asistent financiar
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 1 * *"
+
+jobs:
+  verifica-programul:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descarca proiectul
+        uses: actions/checkout@v4
+
+      - name: Pregateste Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verifica programul
+        run: python main.py
