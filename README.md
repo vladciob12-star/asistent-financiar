@@ -22,6 +22,10 @@ python web_app.py --database data/finante.sqlite3
 
 Deschide `http://127.0.0.1:8765` în browser. Aplicația ascultă numai pe calculatorul local. În interfață poți încărca rapoarte Creasoft CSV, rapoarte financiare Booking CSV și extrase bancare CSV/XLSX cu o mapare JSON explicită. Fișierele originale sunt procesate local și nu sunt păstrate; registrul SQLite salvează datele normalizate, amprenta fișierului și proveniența rândurilor. Potrivirile sunt propuneri până la confirmarea manuală.
 
+Tabloul de bord însumează veniturile, cheltuielile și rezultatul estimat separat pe monede, fără conversii. Banii disponibili apar numai după introducerea manuală a unui sold și a datei din extras. Raportul lunar PDF se descarcă din interfață și este generat temporar pe dispozitiv.
+
+Protecția importului manual: încărcările sunt limitate la 10 MB, procesate local într-un director temporar și validate cu token CSRF și verificarea originii. Serverul ascultă numai pe `127.0.0.1` și nu loghează valorile financiare ori căile cererilor. Registrul păstrează câmpurile normalizate necesare și hash-ul fișierului pentru detectarea reimportului; baza SQLite nu este criptată de aplicație, deci păstreaz-o într-un cont și pe un dispozitiv protejat.
+
 Creasoft nu intră în totalurile lunare dacă raportul nu oferă perioada; valorile cash + non-cash nu sunt sold de numerar. Pentru Booking, payout-ul se confirmă doar după o asociere cu înregistrarea bancară. Clasifică manual tranzacțiile neîncadrate din tabelul interfeței.
 
 Importul Booking specializat:
@@ -61,3 +65,4 @@ python -m unittest discover -s tests -v
 Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. Nu există webhook WhatsApp, autorizare expeditor, găzduire cloud, sincronizare API, backup sau programare automată a raportului. Aceste integrări nu sunt active.
 
 Rapoartele și fișierele financiare locale sunt excluse din Git prin `.gitignore`. Nu folosi date demonstrative drept tranzacții reale.
+
