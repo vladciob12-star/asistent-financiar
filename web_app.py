@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
+import hmac
 import json
+import os
 import re
 import secrets
 import tempfile
+import time
+from http.cookies import SimpleCookie
 from decimal import Decimal
 from contextlib import closing
 from datetime import date
@@ -55,7 +60,7 @@ def _valid_month(value: str) -> str:
     return value
 
 
-def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = "") -> str:
+def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = "", authenticated: bool = False) -> str:
     month = _valid_month(month)
     with closing(connect(db_path)) as db:
         summary = monthly_summary(db, month)
@@ -167,7 +172,8 @@ def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = 
     return f"""<!doctype html><html lang="ro"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Asistent Financiar Personal</title><style>
 :root{{font-family:system-ui,sans-serif;color:#18222f;background:#f2f5f8}}body{{max-width:1180px;margin:0 auto;padding:24px}}h1{{margin-bottom:4px}}h2{{margin-top:30px}}.sub{{color:#586779}}.card,.panel{{background:white;border:1px solid #dce3ea;border-radius:12px;padding:18px;margin:16px 0}}.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}.metric{{background:#f8fafc;border-radius:8px;padding:12px}}.metric span{{color:#586779}}.metric ul{{padding-left:18px;margin-bottom:0}}form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}input,select,textarea,button{{font:inherit;padding:8px;border:1px solid #bbc6d2;border-radius:6px}}input[type=file]{{max-width:100%}}button{{background:#154f7c;color:white;border:0;cursor:pointer}}button:hover{{background:#0f3d61}}textarea{{width:min(100%,700px);height:115px;font-family:monospace}}table{{border-collapse:collapse;width:100%;background:white}}th,td{{padding:9px;border-bottom:1px solid #e4e9ee;text-align:left;vertical-align:top}}th{{background:#f4f7fa}}.scroll{{overflow:auto}}.empty{{color:#697788}}.notice{{background:#e7f4ff;padding:12px;border-radius:8px}}.mapping{{display:block;margin:10px 0}}.safety{{font-size:.92rem;color:#526171}}@media(max-width:640px){{body{{padding:12px}}}}
-</style><body><h1>Asistent Financiar Personal</h1><div class="sub">Aplicație locală · datele rămân pe acest dispozitiv</div>{message_html}
+</style><body><h1>Asistent Financiar Personal</h1><div class="sub">Aplicație locală/cloud privată · extrasele bancare se importă manual</div>{message_html}
+{"<form method='post' action='/logout'>" + form_token() + "<button>Deconectare</button></form>" if authenticated else ""}
 <section class="card"><form class="inline" method="get"><label for="month">Perioadă raportată:</label><input id="month" type="month" name="month" value="{_e(month)}"><button>Vezi luna</button></form>
 <div class="metrics">{incomes}{expenses}{profit}{available}{bank_funds}{receivables}{payout_candidates}</div></section>
 <section class="panel"><h2>Import Creasoft</h2><form method="post" action="/import/creasoft" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><input type="file" name="file" accept=".csv,text/csv" required><button>Importă raportul CSV</button></form><p class="safety">Totalurile combinate cash + non-cash nu sunt interpretate ca numerar fizic. Perioada nu este dedusă dacă lipsește din raport.</p></section>
@@ -180,7 +186,7 @@ def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = 
 <section class="panel"><h2>Tranzacții de clasificat · {_e(month)}</h2><div class="scroll"><table><thead><tr><th>Data</th><th>Sursă</th><th>Descriere</th><th>Sumă</th><th>Clasificare</th></tr></thead><tbody>{unclassified_html}</tbody></table></div></section>
 <section class="panel"><h2>Rapoarte Creasoft importate</h2><div class="scroll"><table><thead><tr><th>Etichetă</th><th>Activitate</th><th>Produse</th><th>Vânzări raportate</th><th>Numerar</th><th>Revizuire</th></tr></thead><tbody>{creasoft_rows or '<tr><td colspan="6" class="empty">Niciun raport importat.</td></tr>'}</tbody></table></div></section>
 <section class="panel"><h2>Importuri recente</h2><div class="scroll"><table><thead><tr><th>Importat la</th><th>Sursă</th><th>Fișier</th><th>Stare</th></tr></thead><tbody>{import_rows or '<tr><td colspan="4" class="empty">Niciun fișier importat.</td></tr>'}</tbody></table></div></section>
-<footer class="safety">Serverul ascultă numai pe acest calculator (127.0.0.1). Nu se conectează la servicii externe și nu trimite fișierele încărcate.</footer></body></html>"""
+<footer class="safety">Extrasele bancare sunt importate manual. Nu există sincronizare bancară automată; fișierele încărcate sunt procesate local de aplicație.</footer></body></html>"""
 
 
 class FinanceRequestHandler(BaseHTTPRequestHandler):
@@ -196,6 +202,9 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -207,8 +216,61 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
+    def _session_token(self) -> str:
+        cookie = SimpleCookie()
+        cookie.load(self.headers.get("Cookie", ""))
+        return cookie.get("finance_session").value if cookie.get("finance_session") else ""
+
+    def _is_authenticated(self) -> bool:
+        if not self.server.auth_password_hash:
+            return True
+        token = self._session_token()
+        expiry = self.server.sessions.get(token)
+        if expiry is None:
+            return False
+        if expiry <= time.time():
+            self.server.sessions.pop(token, None)
+            return False
+        return True
+
+    def _login_page(self, status: int = 200, message: str = "") -> None:
+        error = f"<p role='alert'>{_e(message)}</p>" if message else ""
+        body = ("<!doctype html><html lang='ro'><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+                "<title>Autentificare · Asistent financiar</title><h1>Autentificare</h1>" + error +
+                '<form method="post" action="/login"><input type="hidden" name="csrf" value="' +
+                _e(self.server.csrf_token) + '"><label>Parolă <input type="password" name="password" required '
+                "autocomplete='current-password'></label><button>Intră</button></form></html>")
+        self._send(status, body)
+
+    def _origin_is_valid(self) -> bool:
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        expected = self.server.public_origin or f"http://{self.headers.get('Host', '')}"
+        return hmac.compare_digest(origin.rstrip("/"), expected.rstrip("/"))
+
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
+        if parsed.path == "/healthz":
+            try:
+                with closing(connect(self.server.db_path)) as db:
+                    db.execute("SELECT 1")
+                self._send(200, "ok", "text/plain; charset=utf-8")
+            except OSError:
+                self._send(503, "unavailable", "text/plain; charset=utf-8")
+            return
+        if parsed.path == "/login":
+            if self._is_authenticated():
+                self._redirect(date.today().strftime("%Y-%m"), "Sesiunea este activă.")
+            else:
+                self._login_page()
+            return
+        if self.server.auth_password_hash and not self._is_authenticated():
+            self.send_response(303)
+            self.send_header("Location", "/login")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if parsed.path == "/report.pdf":
             month = parse_qs(parsed.query).get("month", [date.today().strftime("%Y-%m")])[0]
             try:
@@ -236,7 +298,8 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
         month = params.get("month", [date.today().strftime("%Y-%m")])[0]
         message = params.get("message", [""])[0]
         try:
-            page = render_dashboard(self.server.db_path, month, self.server.csrf_token, message)
+            page = render_dashboard(self.server.db_path, month, self.server.csrf_token, message,
+                                    authenticated=bool(self.server.auth_password_hash))
         except (ValueError, OSError) as exc:
             self._send(400, f"<p>{_e(exc)}</p>")
             return
@@ -271,16 +334,55 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
 
     def _check_origin_and_csrf(self, fields: dict[str, str]) -> None:
         origin = self.headers.get("Origin")
-        if origin and origin != f"http://{self.headers.get('Host', '')}":
+        if not self._origin_is_valid():
             raise ValueError("Cererea externă a fost respinsă.")
         if not secrets.compare_digest(fields.get("csrf", ""), self.server.csrf_token):
             raise ValueError("Token de formular invalid. Reîncarcă pagina și încearcă din nou.")
 
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
+        if self.server.auth_password_hash and parsed.path not in {"/login", "/logout"} and not self._is_authenticated():
+            self.send_response(303)
+            self.send_header("Location", "/login")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         try:
             fields, files = self._read_form()
-            self._check_origin_and_csrf(fields)
+            if not self._origin_is_valid():
+                raise ValueError("Cererea externă a fost respinsă.")
+            if not secrets.compare_digest(fields.get("csrf", ""), self.server.csrf_token):
+                raise ValueError("Token de formular invalid. Reîncarcă pagina și încearcă din nou.")
+            if parsed.path == "/login":
+                if not self.server.auth_password_hash:
+                    self._redirect(date.today().strftime("%Y-%m"), "Autentificarea nu este configurată.")
+                    return
+                candidate = _derive_password_hash(fields.get("password", ""), bytes.fromhex(self.server.password_salt))
+                if not hmac.compare_digest(candidate, self.server.auth_password_hash):
+                    self._login_page(401, "Parola nu este corectă.")
+                    return
+                token = secrets.token_urlsafe(32)
+                self.server.sessions[token] = time.time() + 12 * 60 * 60
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.send_header("Set-Cookie", f"finance_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200" + ("; Secure" if self.server.secure_cookies else ""))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            if self.server.auth_password_hash and not self._is_authenticated():
+                self.send_response(303)
+                self.send_header("Location", "/login")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            if parsed.path == "/logout":
+                self.server.sessions.pop(self._session_token(), None)
+                self.send_response(303)
+                self.send_header("Location", "/login")
+                self.send_header("Set-Cookie", "finance_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" + ("; Secure" if self.server.secure_cookies else ""))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             month = _valid_month(fields.get("month", date.today().strftime("%Y-%m")))
             if parsed.path in {"/import/creasoft", "/import/booking", "/import/bank"}:
                 filename, content = files.get("file", ("", b""))
@@ -365,27 +467,73 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
             self._redirect(month, f"Nu s-a putut procesa cererea: {exc}")
 
 
+def hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
+    """Create a PBKDF2-SHA256 hash for APP_PASSWORD_HASH configuration."""
+    if len(password) < 14:
+        raise ValueError("Parola cloud trebuie să aibă cel puțin 14 caractere.")
+    salt = salt or secrets.token_bytes(16)
+    return _derive_password_hash(password, salt), salt.hex()
+
+
+def _derive_password_hash(password: str, salt: bytes) -> str:
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 600_000)
+    return f"pbkdf2_sha256$600000${digest.hex()}"
+
+
 class FinanceHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, db_path: Path, port: int = 8765):
-        super().__init__(("127.0.0.1", port), FinanceRequestHandler)
+    def __init__(self, db_path: Path, port: int = 8765, host: str = "127.0.0.1",
+                 password_hash: str | None = None, password_salt: str | None = None,
+                 public_origin: str | None = None, secure_cookies: bool | None = None):
+        password_hash = password_hash if password_hash is not None else os.environ.get("APP_PASSWORD_HASH", "")
+        password_salt = password_salt if password_salt is not None else os.environ.get("APP_PASSWORD_SALT", "")
+        public_origin = public_origin if public_origin is not None else os.environ.get("APP_PUBLIC_URL", "")
+        secure_cookies = secure_cookies if secure_cookies is not None else public_origin.startswith("https://")
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            if not password_hash or not re.fullmatch(r"pbkdf2_sha256\$600000\$[0-9a-f]{64}", password_hash):
+                raise ValueError("Expunerea publică necesită APP_PASSWORD_HASH PBKDF2 valid.")
+            if not re.fullmatch(r"[0-9a-f]{32}", password_salt):
+                raise ValueError("Expunerea publică necesită APP_PASSWORD_SALT valid.")
+            if not public_origin.startswith("https://") or not secure_cookies:
+                raise ValueError("Expunerea publică necesită APP_PUBLIC_URL HTTPS și cookie-uri Secure.")
+        super().__init__((host, port), FinanceRequestHandler)
         self.db_path = db_path
         self.csrf_token = secrets.token_urlsafe(32)
+        self.auth_password_hash = password_hash
+        self.password_salt = password_salt
+        self.public_origin = public_origin
+        self.secure_cookies = secure_cookies
+        self.sessions: dict[str, float] = {}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Interfață financiară locală, fără servicii externe.")
-    parser.add_argument("--database", type=Path, default=Path("data/finante.sqlite3"))
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--database", type=Path, default=Path(os.environ.get("DATABASE_PATH", "data/finante.sqlite3")))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
+    parser.add_argument("--host", default=os.environ.get("APP_HOST", "127.0.0.1"))
+    parser.add_argument("--hash-password", action="store_true", help="afișează hash-ul unei parole cloud introduse interactiv")
     args = parser.parse_args()
+    if args.hash_password:
+        import getpass
+        password = getpass.getpass("Parolă cloud (minim 14 caractere): ")
+        try:
+            password_hash, password_salt = hash_password(password)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"APP_PASSWORD_HASH={password_hash}")
+        print(f"APP_PASSWORD_SALT={password_salt}")
+        return 0
     if not 1024 <= args.port <= 65535:
         parser.error("--port trebuie să fie între 1024 și 65535.")
     with closing(connect(args.database)) as db:
         db.execute("SELECT 1")
-    server = FinanceHTTPServer(args.database, args.port)
-    print(f"Aplicația financiară locală este disponibilă la http://127.0.0.1:{args.port}")
+    try:
+        server = FinanceHTTPServer(args.database, args.port, args.host)
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(f"Asistentul financiar este disponibil la http://{args.host}:{args.port}")
     print("Pentru oprire, apasă Ctrl+C în această fereastră.")
     try:
         server.serve_forever()
@@ -398,4 +546,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
