@@ -7,6 +7,7 @@ import json
 import re
 import secrets
 import tempfile
+from decimal import Decimal
 from contextlib import closing
 from datetime import date
 from email import policy
@@ -26,6 +27,8 @@ from finance_store import (
     import_creasoft_report,
     import_observations,
     monthly_summary,
+    record_bank_balance,
+    write_monthly_pdf_report,
 )
 from financial_imports import import_csv, import_xlsx, load_mapping
 from main import citeste_raport
@@ -143,6 +146,20 @@ def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = 
     receivables = currency_list("Creanțe Booking încă neîncasate", summary["booking_receivables_not_cash"])
     bank_funds = currency_list("Încasări confirmate în bancă", summary["bank_received_totals"])
     payout_candidates = currency_list("Plăți Booking raportate, neconfirmate", summary["booking_reported_payouts_not_bank_confirmed"])
+    available = currency_list("Bani disponibili · sold bancar introdus manual", summary["bank_available_balances"])
+    monthly_totals: dict[str, dict[str, Decimal]] = {}
+    for currencies in summary["activities"].values():
+        for currency, values in currencies.items():
+            bucket = monthly_totals.setdefault(currency, {"income": Decimal(0), "expense": Decimal(0), "result": Decimal(0)})
+            bucket["income"] += Decimal(values["income"])
+            bucket["expense"] += Decimal(values["expense"]) + Decimal(values["commission"])
+            bucket["result"] += Decimal(values["estimated_result"])
+    def total_card(title: str, key: str) -> str:
+        amounts = "".join(f"<li><b>{values[key]:.2f} {_e(currency)}</b></li>" for currency, values in sorted(monthly_totals.items()))
+        return f"<div class='metric'><span>{_e(title)}</span><ul>{amounts or '<li>—</li>'}</ul></div>"
+    incomes = total_card("Venituri clasificate în lună", "income")
+    expenses = total_card("Cheltuieli și comisioane", "expense")
+    profit = total_card("Profit estimat", "result")
     message_html = f"<p class='notice'>{_e(message)}</p>" if message else ""
     unclassified_html = "".join(unclassified_rows) or '<tr><td colspan="5" class="empty">Nicio tranzacție neclasificată.</td></tr>'
     generic_html = "".join(generic_rows) or '<tr><td colspan="4" class="empty">Nicio asociere în așteptare.</td></tr>'
@@ -152,10 +169,12 @@ def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = 
 :root{{font-family:system-ui,sans-serif;color:#18222f;background:#f2f5f8}}body{{max-width:1180px;margin:0 auto;padding:24px}}h1{{margin-bottom:4px}}h2{{margin-top:30px}}.sub{{color:#586779}}.card,.panel{{background:white;border:1px solid #dce3ea;border-radius:12px;padding:18px;margin:16px 0}}.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}.metric{{background:#f8fafc;border-radius:8px;padding:12px}}.metric span{{color:#586779}}.metric ul{{padding-left:18px;margin-bottom:0}}form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}input,select,textarea,button{{font:inherit;padding:8px;border:1px solid #bbc6d2;border-radius:6px}}input[type=file]{{max-width:100%}}button{{background:#154f7c;color:white;border:0;cursor:pointer}}button:hover{{background:#0f3d61}}textarea{{width:min(100%,700px);height:115px;font-family:monospace}}table{{border-collapse:collapse;width:100%;background:white}}th,td{{padding:9px;border-bottom:1px solid #e4e9ee;text-align:left;vertical-align:top}}th{{background:#f4f7fa}}.scroll{{overflow:auto}}.empty{{color:#697788}}.notice{{background:#e7f4ff;padding:12px;border-radius:8px}}.mapping{{display:block;margin:10px 0}}.safety{{font-size:.92rem;color:#526171}}@media(max-width:640px){{body{{padding:12px}}}}
 </style><body><h1>Asistent Financiar Personal</h1><div class="sub">Aplicație locală · datele rămân pe acest dispozitiv</div>{message_html}
 <section class="card"><form class="inline" method="get"><label for="month">Perioadă raportată:</label><input id="month" type="month" name="month" value="{_e(month)}"><button>Vezi luna</button></form>
-<div class="metrics">{bank_funds}{receivables}{payout_candidates}</div></section>
+<div class="metrics">{incomes}{expenses}{profit}{available}{bank_funds}{receivables}{payout_candidates}</div></section>
 <section class="panel"><h2>Import Creasoft</h2><form method="post" action="/import/creasoft" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><input type="file" name="file" accept=".csv,text/csv" required><button>Importă raportul CSV</button></form><p class="safety">Totalurile combinate cash + non-cash nu sunt interpretate ca numerar fizic. Perioada nu este dedusă dacă lipsește din raport.</p></section>
 <section class="panel"><h2>Import raport financiar Booking.com</h2><form method="post" action="/import/booking" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><input type="file" name="file" accept=".csv,text/csv" required><button>Importă raportul CSV</button></form><p class="safety">Plățile rămân neconfirmate până la asocierea cu extrasul bancar și confirmarea ta.</p></section>
 <section class="panel"><h2>Import extras bancar</h2><form method="post" action="/import/bank" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><label class="mapping">Fișier CSV sau XLSX: <input type="file" name="file" accept=".csv,.xlsx" required></label><label class="mapping">Maparea JSON cu antetele exacte ale extrasului:</label><textarea name="mapping" required>{_e(json.dumps(DEFAULT_MAPPING,ensure_ascii=False,indent=2))}</textarea><button>Importă și salvează în registru</button></form><p class="safety">Câmpurile nemapate rămân neclasificate. Completează DATA, DESCRIERE și SUMA cu antetele reale ale fișierului; nu sunt presupuse formatele băncii.</p></section>
+<section class="panel"><h2>Sold bancar disponibil</h2><form class="inline" method="post" action="/bank-balance">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><label>Sold din extras: <input name="amount" inputmode="decimal" required aria-label="Sold bancar"></label><label>Monedă: <input name="currency" value="RON" minlength="3" maxlength="3" required></label><label>Valabil la: <input type="date" name="as_of" value="{date.today().isoformat()}" required></label><button>Salvează soldul</button></form><p class="safety">Soldul se introduce manual din extras. Aplicația nu se conectează la bancă; încasările lunii și creanțele nu sunt sold disponibil.</p></section>
+<section class="panel"><h2>Raport lunar</h2><a href="/report.pdf?month={_e(month)}">Descarcă raportul PDF pentru {_e(month)}</a></section>
 <section class="panel"><h2>Situația financiară · {_e(month)}</h2><div class="scroll"><table><thead><tr><th>Activitate</th><th>Monedă</th><th>Venit</th><th>Cheltuieli</th><th>Comisioane</th><th>Rezultat estimat</th></tr></thead><tbody>{''.join(activity_rows)}</tbody></table></div><p class="safety">Rezultatele se calculează doar din tranzacțiile clasificate și sunt estimative. Nu se fac conversii între monede.</p></section>
 <section class="panel"><h2>Potriviri propuse · necesită confirmare</h2><h3>Booking cu banca</h3><div class="scroll"><table><thead><tr><th>Plată Booking</th><th>Extras bancar</th><th>Notă</th><th></th></tr></thead><tbody>{booking_html}</tbody></table></div><h3>Alte potriviri între surse</h3><div class="scroll"><table><thead><tr><th>Înregistrare 1</th><th>Înregistrare 2</th><th>Notă</th><th></th></tr></thead><tbody>{generic_html}</tbody></table></div></section>
 <section class="panel"><h2>Tranzacții de clasificat · {_e(month)}</h2><div class="scroll"><table><thead><tr><th>Data</th><th>Sursă</th><th>Descriere</th><th>Sumă</th><th>Clasificare</th></tr></thead><tbody>{unclassified_html}</tbody></table></div></section>
@@ -190,6 +209,26 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
+        if parsed.path == "/report.pdf":
+            month = parse_qs(parsed.query).get("month", [date.today().strftime("%Y-%m")])[0]
+            try:
+                month = _valid_month(month)
+                with tempfile.TemporaryDirectory(prefix="asistent-financiar-pdf-") as folder:
+                    path = Path(folder) / f"raport-financiar-{month}.pdf"
+                    with closing(connect(self.server.db_path)) as db:
+                        write_monthly_pdf_report(db, month, path)
+                    data = path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Disposition", f'attachment; filename="raport-financiar-{month}.pdf"')
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+            except (ValueError, OSError) as exc:
+                self._send(400, f"<p>{_e(exc)}</p>")
+            return
         if parsed.path != "/":
             self._send(404, "Nu există această pagină.")
             return
@@ -293,6 +332,10 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
                     with closing(connect(self.server.db_path)) as db:
                         _, count = import_observations(db, filename, content, observations)
                     message = f"Extras bancar: importate {count} tranzacții; duplicatele de fișier nu se reimportă."
+            elif parsed.path == "/bank-balance":
+                with closing(connect(self.server.db_path)) as db:
+                    record_bank_balance(db, fields.get("amount", ""), fields.get("currency", ""), fields.get("as_of", ""))
+                message = "Soldul bancar introdus manual a fost salvat."
             elif parsed.path == "/confirm/general":
                 with closing(connect(self.server.db_path)) as db:
                     confirm_reconciliation(db, int(fields.get("reconciliation_id", "")))
@@ -355,3 +398,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
