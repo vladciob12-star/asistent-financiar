@@ -131,7 +131,11 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             record_bank_balance(self.db, "NaN", "RON", "2026-09-30")
         with self.assertRaises(ValueError):
+            record_bank_balance(self.db, "not-a-number", "RON", "2026-09-30")
+        with self.assertRaises(ValueError):
             record_bank_balance(self.db, "20", "EURO", "2026-09-30")
+        with self.assertRaises(ValueError):
+            record_bank_balance(self.db, "20", "RÖN", "2026-09-30")
 
     def test_monthly_pdf_report_is_generated_and_has_no_spurious_financial_values(self):
         row = Observation("bank", "2026-09-12", "Venit sintetic", "100.00", "RON", "shop", "income", "received", source_row=2)
