@@ -23,8 +23,8 @@ Prețurile sunt instantaneul paginilor oficiale la data de mai sus și se pot sc
 - Aplicația acceptă DATABASE_PATH, APP_HOST și PORT; endpointul /healthz verifică SQLite fără a expune conținutul bazei.
 - Orice bind public (0.0.0.0) este refuzat fără hash PBKDF2, salt, APP_PUBLIC_URL HTTPS și cookie Secure. Interfața de import este protejată de autentificare, cookie HttpOnly/SameSite și sesiune de 12 ore. În modul local implicit rămâne legată la 127.0.0.1.
 - SQLite este salvat sub /var/data, în discul persistent. Pe Render, conținutul din afara punctului de montare rămâne efemer; această aplicație folosește baza exact din punctul persistent.
-- Render creează snapshot-uri automate zilnice criptate, disponibile cel puțin 7 zile. Pentru o copie independentă, scripts/backup_database.py produce backup AES-256-GCM autentificat și îl poate restaura după oprirea aplicației. Cheia Base64 de 32 bytes trebuie păstrată separat într-un manager de secrete; nu este generată sau stocată de aplicație.
-- Backup-ul criptat nu este încă programat și nu este încărcat automat într-un al doilea furnizor. Configurează o destinație și o frecvență doar după ce alegi separat unde și cât timp păstrezi copiile.
+- Render creează automat snapshot-uri zilnice criptate ale discului, disponibile cel puțin 7 zile; nu este necesară o programare suplimentară pentru această protecție. Restaurarea revine la starea întregului disc și poate pierde modificările de după snapshot. Acestea nu sunt copii independente în alt cont/furnizor. Pentru o copie portabilă, scripts/backup_database.py creează la comandă un backup SQLite consistent și criptat AES-256-GCM. Cheia Base64 de 32 bytes trebuie păstrată separat; aplicația nu o generează și nu o stochează.
+- Nu este configurat un backup extern automat. Pentru protecție independentă de Render trebuie aleasă o destinație, frecvență, retenție și custodia cheii; aceasta poate adăuga costuri și cere aprobarea proprietarului.
 
 Pași care vor necesita decizia/configurarea proprietarului:
 
@@ -62,4 +62,3 @@ Pași care vor necesita decizia/configurarea proprietarului:
 - [Meta WhatsApp Cloud API getting started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started).
 - [Creasoft: integrare/API și export Excel](https://www.creasoft.ro/ro/control-access-made-in-romania).
 - [Booking.com Connectivity APIs](https://developers.booking.com/connectivity/docs), [autentificare](https://developers.booking.com/connectivity/docs/authentication), [acces endpoint](https://developers.booking.com/connectivity/docs/managing-endpoint-access), [Payments API](https://developers.booking.com/connectivity/docs/payments-api/understanding-the-payments-api) și [Reconciliation API](https://developers.booking.com/connectivity/docs/openapispecs/reconciliation-api/reconciliation-api-specification).
-
