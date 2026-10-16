@@ -165,9 +165,19 @@ def import_observations(db: sqlite3.Connection, filename: str,
             amount = Decimal(row.amount)
             if not amount.is_finite() or len(row.currency) != 3:
                 raise ValueError(f"Înregistrare invalidă la rândul {row.source_row}.")
-            same = db.execute("""SELECT id FROM observations
+            same = db.execute("""SELECT id,amount FROM observations
                 WHERE source=? AND external_id<>'' AND external_id=? AND amount=? AND currency=?""",
                 (row.source, row.external_id, str(amount), row.currency.upper())).fetchone() if row.external_id else None
+            # Compare monetary values as Decimals so harmless formatting such as
+            # 100, 100.0 and 100.00 cannot prevent a reconciliation proposal.
+            if same and Decimal(same["amount"]) != amount:
+                same = None
+            if row.external_id and not same:
+                possible_duplicate = db.execute("""SELECT id,amount FROM observations
+                    WHERE source=? AND external_id=? AND currency=?""",
+                    (row.source, row.external_id, row.currency.upper())).fetchall()
+                same = next((candidate for candidate in possible_duplicate
+                             if Decimal(candidate["amount"]) == amount), None)
             cur = db.execute("""INSERT INTO observations(import_id,source,external_id,occurred_on,
                 description,amount,currency,activity,kind,settlement,counterparty,source_row,raw_json,duplicate_of)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -178,13 +188,27 @@ def import_observations(db: sqlite3.Connection, filename: str,
             inserted += 1
             # Cross-source close matches are retained and explicitly need review.
             if row.source.lower() in {"bank", "banca", "extras bancar"}:
-                matches = db.execute("""SELECT id FROM observations WHERE id<>? AND source<>?
+                matches = db.execute("""SELECT id,amount FROM observations WHERE id<>? AND source<>?
                     AND occurred_on BETWEEN date(?, '-3 day') AND date(?, '+3 day')
-                    AND currency=? AND amount=? AND duplicate_of IS NULL""",
-                    (new_id,row.source,row.occurred_on,row.occurred_on,row.currency.upper(),str(amount))).fetchall()
+                    AND currency=? AND duplicate_of IS NULL""",
+                    (new_id,row.source,row.occurred_on,row.occurred_on,row.currency.upper())).fetchall()
                 for match in matches:
+                    if Decimal(match["amount"]) != amount:
+                        continue
                     db.execute("INSERT OR IGNORE INTO reconciliations(left_id,right_id,confidence,note) VALUES(?,?,?,?)",
                                (min(new_id,match["id"]),max(new_id,match["id"]),"possible","Sumă și dată apropiate; confirmare manuală necesară."))
+                # Also check Booking payouts here, so the result does not depend
+                # on whether the bank file or the Booking report was imported first.
+                booking_matches = db.execute("""SELECT id,payout_value FROM booking_entries
+                    WHERE record_type IN ('(Payout)','Payout') AND settlement_status='reported_not_bank_confirmed'
+                    AND payout_currency=? AND payout_date BETWEEN date(?, '-3 day') AND date(?, '+3 day')
+                    AND payout_value IS NOT NULL""",
+                    (row.currency.upper(),row.occurred_on,row.occurred_on)).fetchall()
+                for booking_match in booking_matches:
+                    if Decimal(booking_match["payout_value"]) != amount:
+                        continue
+                    db.execute("INSERT OR IGNORE INTO booking_reconciliations(booking_entry_id,bank_observation_id,confidence,note) VALUES(?,?,?,?)",
+                               (booking_match["id"],new_id,"possible","Sumă și dată apropiate; confirmarea rămâne manuală."))
         return import_id, inserted
 
 
@@ -215,11 +239,13 @@ def import_booking_records(db: sqlite3.Connection, filename: str, content: bytes
             booking_id=db.execute("SELECT last_insert_rowid()").fetchone()[0]
             count+=1
             if record.record_type.casefold() in {"(payout)","payout"} and record.payout_value and record.payout_date:
-                matches=db.execute("""SELECT id FROM observations WHERE source IN ('bank','banca','extras bancar')
-                    AND settlement='received' AND currency=? AND amount=?
+                matches=db.execute("""SELECT id,amount FROM observations WHERE source IN ('bank','banca','extras bancar')
+                    AND settlement='received' AND currency=?
                     AND occurred_on BETWEEN date(?, '-3 day') AND date(?, '+3 day') AND duplicate_of IS NULL""",
-                    (record.payout_currency,record.payout_value,record.payout_date,record.payout_date)).fetchall()
+                    (record.payout_currency,record.payout_date,record.payout_date)).fetchall()
                 for match in matches:
+                    if Decimal(match["amount"]) != Decimal(record.payout_value):
+                        continue
                     db.execute("INSERT OR IGNORE INTO booking_reconciliations(booking_entry_id,bank_observation_id,confidence,note) VALUES(?,?,?,?)",
                         (booking_id,match["id"],"possible","Valoarea și data plății coincid; confirmarea rămâne manuală."))
         return import_id,count
@@ -277,7 +303,7 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
         AND settlement_status='reported_not_bank_confirmed' AND payout_value IS NOT NULL""",(month,)).fetchall()
     bank_rows=db.execute("""SELECT currency,amount FROM observations
         WHERE substr(occurred_on,1,7)=? AND source IN ('bank','banca','extras bancar')
-        AND settlement='received' AND duplicate_of IS NULL""",(month,)).fetchall()
+        AND settlement='received' AND CAST(amount AS NUMERIC)>0 AND duplicate_of IS NULL""",(month,)).fetchall()
     def currency_totals(values):
         sums: dict[str,Decimal]={}
         for item in values:

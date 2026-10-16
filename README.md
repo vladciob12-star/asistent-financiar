@@ -14,6 +14,16 @@ Nucleu local de import și registru financiar în dezvoltare. Datele rămân loc
 
 ## Comenzi locale
 
+Pornește interfața locală de import și raportare:
+
+```text
+python web_app.py --database data/finante.sqlite3
+```
+
+Deschide `http://127.0.0.1:8765` în browser. Aplicația ascultă numai pe calculatorul local. În interfață poți încărca rapoarte Creasoft CSV, rapoarte financiare Booking CSV și extrase bancare CSV/XLSX cu o mapare JSON explicită. Fișierele originale sunt procesate local și nu sunt păstrate; registrul SQLite salvează datele normalizate, amprenta fișierului și proveniența rândurilor. Potrivirile sunt propuneri până la confirmarea manuală.
+
+Creasoft nu intră în totalurile lunare dacă raportul nu oferă perioada; valorile cash + non-cash nu sunt sold de numerar. Pentru Booking, payout-ul se confirmă doar după o asociere cu înregistrarea bancară. Clasifică manual tranzacțiile neîncadrate din tabelul interfeței.
+
 Importul Booking specializat:
 
 ```text
