@@ -1,8 +1,9 @@
 import csv
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
 DIRECTOR_RAPOARTE = Path("rapoarte")
+FISIER_TEST = Path("rapoarte_test.csv")
 
 
 def citeste_csv(fisier):
@@ -31,37 +32,41 @@ def transforma_suma(valoare):
         return 0.0
 
 
-def verifica_sistemul():
-    DIRECTOR_RAPOARTE.mkdir(exist_ok=True)
-
-    print("=" * 45)
-    print("ASISTENT FINANCIAR")
-    print("=" * 45)
-    print(f"Data verificarii: {datetime.now():%d-%m-%Y %H:%M}")
-
-    fisier_test = Path("rapoarte_test.csv")
-
-    if not fisier_test.exists():
+def verifica_raport_test():
+    if not FISIER_TEST.exists():
         print("EROARE: Nu gasesc fisierul rapoarte_test.csv.")
         return
 
-    randuri = citeste_csv(fisier_test)
+    inregistrari = citeste_csv(FISIER_TEST)
+
+    print("=" * 45)
+    print("ASISTENT FINANCIAR - TEST")
+    print("=" * 45)
+    print(f"Data verificarii: {datetime.now():%d-%m-%Y %H:%M}")
+    print(f"Numar de inregistrari: {len(inregistrari)}")
+
     total = 0.0
 
-    for rand in randuri:
+    for rand in inregistrari:
+        sursa = rand.get("sursa", "Necunoscuta")
+        data = rand.get("data", "")
+        descriere = rand.get("descriere", "")
         suma = transforma_suma(rand.get("suma", "0"))
-        total += suma
-        print(
-            f"Sursa: {rand.get('sursa', 'Necunoscuta')} | "
-            f"Data: {rand.get('data', '-')} | "
-            f"Descriere: {rand.get('descriere', '-')} | "
-            f"Suma: {suma:.2f} lei"
-        )
 
+        total += suma
+
+        print()
+        print(f"Sursa: {sursa}")
+        print(f"Data: {data}")
+        print(f"Descriere: {descriere}")
+        print(f"Suma: {suma:.2f} lei")
+
+    print()
     print("-" * 45)
-    print(f"TOTAL INREGISTRARI DE TEST: {total:.2f} lei")
-    print("Verificarea fisierului s-a incheiat.")
+    print(f"TOTAL DE TEST: {total:.2f} lei")
+    print("-" * 45)
+    print("Test terminat.")
 
 
 if __name__ == "__main__":
-    verifica_sistemul()
+    verifica_raport_test()
