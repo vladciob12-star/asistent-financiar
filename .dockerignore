@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+__pycache__
+*.py[cod]
+*.sqlite3
+*.sqlite3-*
+*.afpb
+backups
+outputs
+rapoarte
+config/mapare*.json
