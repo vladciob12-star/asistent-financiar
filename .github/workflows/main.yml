@@ -1,6 +1,10 @@
 name: Teste automate asistent financiar
 
 on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -21,3 +25,4 @@ jobs:
 
       - name: Ruleaza testele automate
         run: python -m unittest discover -s tests -v
+
