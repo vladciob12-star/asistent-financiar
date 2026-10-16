@@ -5,11 +5,13 @@ import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, build_opener, HTTPCookieProcessor, HTTPRedirectHandler
+from urllib.error import HTTPError
+from http.cookiejar import CookieJar
 
 from booking_imports import HEADERS
 from finance_store import connect
-from web_app import FinanceHTTPServer
+from web_app import FinanceHTTPServer, hash_password
 
 
 def multipart(fields, filename=None, content=None):
@@ -93,6 +95,46 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(row["raw_json"], "{}")
             self.assertEqual(db.execute("SELECT filename FROM imports").fetchone()[0], "synthetic-statement.csv")
 
+    def test_cloud_auth_requires_https_hash_and_gates_dashboard(self):
+        with self.assertRaises(ValueError):
+            FinanceHTTPServer(self.database, 0, host="0.0.0.0")
+        encoded_hash, salt = hash_password("Synthetic-Only-Cloud-Password")
+        self.server.auth_password_hash = encoded_hash
+        self.server.password_salt = salt
+        self.server.public_origin = "https://finance.example"
+        self.server.secure_cookies = True
+        jar = CookieJar()
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        opener = build_opener(HTTPCookieProcessor(jar), NoRedirect)
+        login_page = opener.open(self.base + "/login").read().decode()
+        self.assertIn("Autentificare", login_page)
+        token = re.search(r'name="csrf" value="([^"]+)"', login_page).group(1)
+        page = self.post("/import/creasoft", {
+            "csrf": token, "month": "2026-09",
+        }, "synthetic.csv", b"not-used")
+        self.assertIn("Autentificare", page)
+        with closing(connect(self.database)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM imports").fetchone()[0], 0)
+
+        boundary, body = multipart({"csrf": token, "password": "Synthetic-Only-Cloud-Password"})
+        request = Request(self.base + "/login", data=body, headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Origin": "https://finance.example",
+        })
+        try:
+            opener.open(request)
+        except HTTPError as response:
+            self.assertEqual(response.code, 303)
+            cookie_header = response.headers.get("Set-Cookie", "")
+        else:
+            self.fail("Login-ul trebuia să redirecționeze către tabloul de bord.")
+        self.assertIn("; Secure", cookie_header)
+        session = re.search(r"finance_session=([^;]+)", cookie_header).group(1)
+        logged_in = urlopen(Request(self.base + "/", headers={"Cookie": f"finance_session={session}"})).read().decode()
+        self.assertIn("Asistent Financiar Personal", logged_in)
+
     def test_creasoft_report_upload_is_saved_without_inventing_period(self):
         content = (
             "Vendomat;Cantitate;Incasari totale (cash + non-cash - rest)\n"
@@ -149,4 +191,3 @@ class WebAppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
