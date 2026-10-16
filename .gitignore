@@ -1,0 +1,13 @@
+# Locally imported reports and generated exports may contain financial data.
+rapoarte/creasoft/*.csv
+outputs/*.csv
+config/mapare*.json
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.sqlite3-*
+data/
+outputs/*.html
+__pycache__/
+*.py[cod]
