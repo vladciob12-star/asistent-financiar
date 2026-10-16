@@ -1,15 +1,8 @@
 import csv
-import json
 from datetime import datetime
 from pathlib import Path
 
-DIRECTOR_DATE = Path("date")
 DIRECTOR_RAPOARTE = Path("rapoarte")
-
-
-def pregateste_directoare():
-    DIRECTOR_DATE.mkdir(exist_ok=True)
-    DIRECTOR_RAPOARTE.mkdir(exist_ok=True)
 
 
 def citeste_csv(fisier):
@@ -29,7 +22,7 @@ def transforma_suma(valoare):
             valoare = valoare.replace(".", "").replace(",", ".")
         else:
             valoare = valoare.replace(",", "")
-    elif "," in valoare:
+    else:
         valoare = valoare.replace(",", ".")
 
     try:
@@ -39,24 +32,35 @@ def transforma_suma(valoare):
 
 
 def verifica_sistemul():
-    pregateste_directoare()
+    DIRECTOR_RAPOARTE.mkdir(exist_ok=True)
 
     print("=" * 45)
     print("ASISTENT FINANCIAR")
     print("=" * 45)
     print(f"Data verificarii: {datetime.now():%d-%m-%Y %H:%M}")
-    print()
-    print("Surse pregatite:")
-    print("- Creasoft")
-    print("- Booking.com")
-    print("- Extras bancar PFA")
-    print()
-    print("Functii pregatite:")
-    print("- Citire fisiere CSV")
-    print("- Transformare sume in numere")
-    print("- Pregatire directoare pentru date si rapoarte")
-    print()
-    print("Urmatorul pas: importul raportului Creasoft.")
+
+    fisier_test = Path("rapoarte_test.csv")
+
+    if not fisier_test.exists():
+        print("EROARE: Nu gasesc fisierul rapoarte_test.csv.")
+        return
+
+    randuri = citeste_csv(fisier_test)
+    total = 0.0
+
+    for rand in randuri:
+        suma = transforma_suma(rand.get("suma", "0"))
+        total += suma
+        print(
+            f"Sursa: {rand.get('sursa', 'Necunoscuta')} | "
+            f"Data: {rand.get('data', '-')} | "
+            f"Descriere: {rand.get('descriere', '-')} | "
+            f"Suma: {suma:.2f} lei"
+        )
+
+    print("-" * 45)
+    print(f"TOTAL INREGISTRARI DE TEST: {total:.2f} lei")
+    print("Verificarea fisierului s-a incheiat.")
 
 
 if __name__ == "__main__":
