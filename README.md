@@ -12,7 +12,7 @@ Nucleu local de import și registru financiar în dezvoltare. Datele rămân loc
 - O plată Booking raportată rămâne neconfirmată în bancă până la potrivire și confirmare manuală. Ea nu este adunată la fondurile bancare.
 - Reimportul aceluiași fișier este idempotent. Înregistrările similare necerte sunt păstrate și semnalate.
 - Profil Docker/Render cu autentificare cloud obligatorie, health check și cale de bază de date configurabilă.
-- Utilitar pentru backup/restaurare SQLite criptată AES-256-GCM; backup-urile nu sunt trimise automat nicăieri.
+- Snapshot-uri Render automate zilnice și criptate pentru discul persistent; utilitar separat pentru backup/restaurare SQLite AES-256-GCM, rulat la comandă. Nu este configurată o destinație externă automată.
 
 ## Comenzi locale
 
@@ -44,7 +44,7 @@ Exemplu de backup criptat, rulat pe instanța care poate accesa baza:
 
     python scripts/backup_database.py --create --database /var/data/finante.sqlite3 --backup /var/data/backup-2026-10-16.afpb
 
-BACKUP_ENCRYPTION_KEY trebuie să fie Base64 pentru o cheie aleatorie de 32 bytes, păstrată separat. Restaurarea cere oprirea aplicației și o cale --target explicită. Nu există programare sau transfer automat al copiilor în această versiune.
+BACKUP_ENCRYPTION_KEY trebuie să fie Base64 pentru o cheie aleatorie de 32 bytes, păstrată separat. Restaurarea cere oprirea aplicației și o cale --target explicită. În hostingul Render, snapshot-urile discului sunt zilnice și automate. Backup-ul criptat portabil nu are programare sau transfer extern în această versiune.
 
 Importul Booking specializat:
 
@@ -80,6 +80,6 @@ python -m unittest discover -s tests -v
 
 ## Limite și pașii rămași
 
-Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. Nu există webhook WhatsApp, API Creasoft/Booking conectate sau programarea automată a rapoartelor/backups. Hostingul este doar pregătit, nu activat.
+Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. Nu există webhook WhatsApp sau API Creasoft/Booking conectate. Hostingul este doar pregătit, nu activat. Snapshot-urile Render sunt automate în cazul unui deploy cu disc persistent; nu este configurată o copie criptată off-site.
 
 Rapoartele și fișierele financiare locale sunt excluse din Git prin `.gitignore`. Nu folosi date demonstrative drept tranzacții reale.
