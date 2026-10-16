@@ -11,7 +11,7 @@ import sqlite3
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
@@ -336,10 +336,13 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
 
 def record_bank_balance(db: sqlite3.Connection, amount: str, currency: str, as_of: str) -> int:
     """Record an explicitly user-entered statement balance, without a bank connection."""
-    value = Decimal(amount)
+    try:
+        value = Decimal(amount)
+    except InvalidOperation as exc:
+        raise ValueError("Introdu un sold numeric valid.") from exc
     currency = currency.strip().upper()
     date.fromisoformat(as_of)
-    if not value.is_finite() or len(currency) != 3 or not currency.isalpha():
+    if not value.is_finite() or len(currency) != 3 or not currency.isascii() or not currency.isalpha():
         raise ValueError("Introdu un sold numeric și un cod de monedă ISO din 3 litere.")
     with db:
         cur = db.execute("INSERT INTO bank_balances(currency,amount,as_of) VALUES(?,?,?)",
