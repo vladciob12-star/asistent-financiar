@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: asistent-financiar-personal
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    autoDeployTrigger: off
+    healthCheckPath: /healthz
+    disk:
+      name: financial-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: APP_HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_PATH
+        value: /var/data/finante.sqlite3
+      - key: APP_PUBLIC_URL
+        sync: false
+      - key: APP_PASSWORD_HASH
+        sync: false
+      - key: APP_PASSWORD_SALT
+        sync: false
