@@ -256,7 +256,7 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
     """Summarize classified income/expenses and distinct bank-confirmed funds."""
     date.fromisoformat(month + "-01")
     rows=db.execute("SELECT * FROM observations WHERE substr(occurred_on,1,7)=? AND duplicate_of IS NULL",(month,)).fetchall()
-    totals: dict[str,dict[str,Decimal]]={}
+    totals: dict[str,dict[str,dict[str,Decimal]]]={}
     for row in rows:
         if row["kind"] not in {"income","expense","commission"}:
             continue
@@ -264,7 +264,9 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
         # supporting evidence, and must never add the same payout a second time.
         if row["source"] == "booking" and row["kind"] == "income":
             continue
-        bucket=totals.setdefault(row["activity"],{"income":Decimal(0),"expense":Decimal(0),"commission":Decimal(0)})
+        currency = row["currency"].upper()
+        bucket=totals.setdefault(row["activity"],{}).setdefault(
+            currency,{"income":Decimal(0),"expense":Decimal(0),"commission":Decimal(0)})
         amount=Decimal(row["amount"])
         bucket[row["kind"]]+=amount if row["kind"] == "income" else abs(amount)
     outstanding_rows=db.execute("""SELECT currency,amount FROM observations
@@ -282,8 +284,9 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
             sums[item['currency']]=sums.get(item['currency'],Decimal(0))+Decimal(item['amount'])
         return [{"currency":currency,"amount":format(amount,'.2f')} for currency,amount in sorted(sums.items())]
     unclassified=[dict(r) for r in rows if r["kind"] in {"unclassified","unassigned"}]
-    return {"period":month,"activities":{key:{k:format(v,'.2f') for k,v in value.items()} |
-        {"estimated_result":format(value['income']-value['expense']-value['commission'],'.2f')} for key,value in totals.items()},
+    return {"period":month,"activities":{activity:{currency:{k:format(v,'.2f') for k,v in value.items()} |
+        {"estimated_result":format(value['income']-value['expense']-value['commission'],'.2f')}
+        for currency,value in currencies.items()} for activity,currencies in totals.items()},
         "bank_received_totals":currency_totals(bank_rows),"booking_receivables_not_cash":currency_totals(outstanding_rows),
         "booking_reported_payouts_not_bank_confirmed":currency_totals(booking_payout_rows),
         "unclassified":unclassified,
@@ -298,12 +301,13 @@ def monthly_summary(db: sqlite3.Connection, month: str) -> dict:
 def write_html_report(db: sqlite3.Connection, month: str, path: Path) -> None:
     report=monthly_summary(db,month)
     rows=[]
-    for activity, values in report["activities"].items():
-        rows.append("<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-            _escape(activity),values["income"],values["expense"],values["estimated_result"]))
+    for activity, currencies in report["activities"].items():
+        for currency, values in currencies.items():
+            rows.append("<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                _escape(activity),_escape(currency),values["income"],values["expense"],values["estimated_result"]))
     html="""<!doctype html><html lang='ro'><meta charset='utf-8'><title>Raport financiar {period}</title>
     <h1>Raport financiar — {period}</h1><p>Estimări bazate doar pe înregistrările clasificate.</p>
-    <table><thead><tr><th>Activitate</th><th>Venituri (lei)</th><th>Cheltuieli (lei)</th><th>Rezultat estimat (lei)</th></tr></thead>
+    <table><thead><tr><th>Activitate</th><th>Monedă</th><th>Venituri</th><th>Cheltuieli</th><th>Rezultat estimat</th></tr></thead>
     <tbody>{rows}</tbody></table><h2>Plăți Booking raportate, încă neconfirmate în bancă</h2><pre>{booking_payouts}</pre>
     <h2>Plăți Booking mapate ca neachitate</h2><pre>{receivables}</pre>
     <h2>Agregate Creasoft fără perioadă identificată (cash + non-cash)</h2><pre>{creasoft}</pre>

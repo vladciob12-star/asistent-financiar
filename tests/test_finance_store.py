@@ -74,7 +74,7 @@ class LedgerTests(unittest.TestCase):
         result=monthly_summary(self.db,"2026-09")
         self.assertEqual(result["booking_receivables_not_cash"],[{"currency":"RON","amount":"500.00"}])
         self.assertEqual(result["bank_received_totals"],[{"currency":"RON","amount":"500.00"}])
-        self.assertEqual(result["activities"]["booking_property"]["income"],"500.00")
+        self.assertEqual(result["activities"]["booking_property"]["RON"]["income"],"500.00")
         self.assertEqual(len(result["reconciliation_issues"]),1)
         confirm_reconciliation(self.db, result["reconciliation_issues"][0]["id"])
         self.assertEqual(monthly_summary(self.db,"2026-09")["reconciliation_issues"],[])
@@ -87,7 +87,7 @@ class LedgerTests(unittest.TestCase):
         rows=self.db.execute("select duplicate_of from observations order by id").fetchall()
         self.assertIsNone(rows[0][0])
         self.assertEqual(rows[1][0],1)
-        self.assertEqual(monthly_summary(self.db,"2026-09")["activities"]["x"]["income"],"10.00")
+        self.assertEqual(monthly_summary(self.db,"2026-09")["activities"]["x"]["RON"]["income"],"10.00")
 
     def test_manual_expense_classification_uses_absolute_expense_amount(self):
         row=Observation("bank","2026-09-01","Comision","-0.10","RON",source_row=2)
@@ -97,8 +97,19 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(before["activities"],{})
         classify_observation(self.db,1,activity="bank",kind="commission")
         after=monthly_summary(self.db,"2026-09")
-        self.assertEqual(after["activities"]["bank"]["commission"],"0.10")
-        self.assertEqual(after["activities"]["bank"]["estimated_result"],"-0.10")
+        self.assertEqual(after["activities"]["bank"]["RON"]["commission"],"0.10")
+        self.assertEqual(after["activities"]["bank"]["RON"]["estimated_result"],"-0.10")
+
+    def test_monthly_activities_keep_currencies_separate(self):
+        ron=Observation("bank","2026-09-01","RON income","100.00","RON","shop","income","received","R1",source_row=2)
+        eur=Observation("bank","2026-09-02","EUR expense","-25.00","EUR","shop","expense","recorded","E1",source_row=2)
+        import_observations(self.db,"ron.csv",b"ron",[ron])
+        import_observations(self.db,"eur.csv",b"eur",[eur])
+        activity=monthly_summary(self.db,"2026-09")["activities"]["shop"]
+        self.assertEqual(activity["RON"]["income"],"100.00")
+        self.assertEqual(activity["RON"]["estimated_result"],"100.00")
+        self.assertEqual(activity["EUR"]["expense"],"25.00")
+        self.assertEqual(activity["EUR"]["estimated_result"],"-25.00")
 
     def test_invalid_batch_rolls_back_everything(self):
         valid=Observation("bank","2026-09-01","A","2.00","RON",source_row=2)
@@ -128,6 +139,7 @@ class LedgerTests(unittest.TestCase):
                                "--report-html",str(report)],capture_output=True,text=True,check=False)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn("12.34",report.read_text(encoding="utf-8"))
+        self.assertIn("Monedă",report.read_text(encoding="utf-8"))
         check=connect(database)
         try:
             self.assertEqual(check.execute("select period from reports").fetchone()[0],"2026-09")
