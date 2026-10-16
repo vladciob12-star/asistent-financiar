@@ -8,6 +8,8 @@ config/mapare*.json
 *.sqlite3
 *.sqlite3-*
 data/
+backups/
+*.afpb
 outputs/*.html
 __pycache__/
 *.py[cod]
