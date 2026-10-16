@@ -58,6 +58,40 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("/import/booking", self.page)
         self.assertIn("/import/bank", self.page)
         self.assertIn("Potriviri propuse", self.page)
+        self.assertIn("Venituri clasificate în lună", self.page)
+        self.assertIn("Cheltuieli și comisioane", self.page)
+        self.assertIn("Profit estimat", self.page)
+        self.assertIn("Bani disponibili", self.page)
+        self.assertIn("/report.pdf?month=", self.page)
+
+    def test_manual_balance_and_monthly_pdf_download(self):
+        page = self.post("/bank-balance", {
+            "csrf": self.csrf, "month": "2026-09", "amount": "2500.00",
+            "currency": "RON", "as_of": "2026-09-30",
+        })
+        self.assertIn("Soldul bancar introdus manual a fost salvat", page)
+        with closing(connect(self.database)) as db:
+            self.assertEqual(tuple(db.execute("SELECT currency,amount,as_of FROM bank_balances").fetchone()),
+                             ("RON", "2500.00", "2026-09-30"))
+        response = urlopen(self.base + "/report.pdf?month=2026-09")
+        self.assertEqual(response.headers.get_content_type(), "application/pdf")
+        self.assertTrue(response.read().startswith(b"%PDF-"))
+
+    def test_manual_bank_import_keeps_file_temporary_and_stores_mapped_fields(self):
+        mapping = {
+            "source": "bank", "currency": "RON", "date_format": "%Y-%m-%d", "delimiter": ",",
+            "columns": {"date": "Date", "description": "Description", "amount": "Amount", "external_id": "Reference"},
+        }
+        content = b"Date,Description,Amount,Reference\n2026-09-15,SYNTHETIC PAYMENT,10.00,SYNTHETIC-ID\n"
+        page = self.post("/import/bank", {
+            "csrf": self.csrf, "month": "2026-09", "mapping": json.dumps(mapping),
+        }, "synthetic-statement.csv", content)
+        self.assertIn("Extras bancar: importate 1 tranzacții", page)
+        with closing(connect(self.database)) as db:
+            row = db.execute("SELECT description,external_id,raw_json FROM observations").fetchone()
+            self.assertEqual(row[0:2], ("SYNTHETIC PAYMENT", "SYNTHETIC-ID"))
+            self.assertEqual(row["raw_json"], "{}")
+            self.assertEqual(db.execute("SELECT filename FROM imports").fetchone()[0], "synthetic-statement.csv")
 
     def test_creasoft_report_upload_is_saved_without_inventing_period(self):
         content = (
@@ -115,3 +149,4 @@ class WebAppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
