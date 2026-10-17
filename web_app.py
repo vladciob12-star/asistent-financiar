@@ -77,6 +77,17 @@ def _origin_key(value: str, *, allow_path: bool = False) -> tuple[str, str, int]
     except ValueError:
         return None
 
+def _host_key(value: str, scheme: str) -> tuple[str, int] | None:
+    """Normalize a Host header for the guarded opaque-Origin fallback."""
+    try:
+        parsed = urlsplit("//" + value)
+        if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+        return parsed.hostname.casefold(), port
+    except ValueError:
+        return None
+
 
 def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = "", authenticated: bool = False) -> str:
     month = _valid_month(month)
@@ -272,6 +283,16 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
             return True
         expected = self.server.public_origin or f"http://{self.headers.get('Host', '')}"
         expected_key = _origin_key(expected, allow_path=True)
+        if origin == "null":
+            # Opaque browser origins are accepted only when Fetch Metadata proves
+            # this is same-origin and the request Host matches the configured app.
+            request_host = _host_key(self.headers.get("Host", ""), expected_key[0]) if expected_key else None
+            return (
+                self.headers.get("Sec-Fetch-Site", "").lower() == "same-origin"
+                and expected_key is not None
+                and request_host is not None
+                and hmac.compare_digest(repr(request_host), repr(expected_key[1:]))
+            )
         actual_key = _origin_key(origin)
         return expected_key is not None and actual_key is not None and hmac.compare_digest(
             repr(actual_key), repr(expected_key)
