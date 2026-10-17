@@ -136,6 +136,87 @@ class WebAppTests(unittest.TestCase):
         logged_in = urlopen(Request(self.base + "/", headers={"Cookie": f"finance_session={session}"})).read().decode()
         self.assertIn("Asistent Financiar Personal", logged_in)
 
+
+    def test_opaque_origin_requires_same_origin_fetch_metadata_and_matching_host(self):
+        encoded_hash, salt = hash_password("Synthetic-Only-Cloud-Password")
+        self.server.auth_password_hash = encoded_hash
+        self.server.password_salt = salt
+        self.server.public_origin = f"https://127.0.0.1:{self.server.server_port}/login"
+        login_page = urlopen(self.base + "/login").read().decode("utf-8")
+        token = re.search(r'name="csrf" value="([^"]+)"', login_page).group(1)
+        body = urlencode({"csrf": token, "password": "Definitely-Wrong-Synthetic-Password"}).encode("utf-8")
+
+        cross_site = Request(self.base + "/login", data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "null", "Sec-Fetch-Site": "cross-site",
+        })
+        with self.assertRaises(HTTPError) as rejected:
+            urlopen(cross_site)
+        self.assertEqual(rejected.exception.code, 400)
+        self.assertIn("Cererea externă a fost respinsă", rejected.exception.read().decode("utf-8"))
+
+        same_site = Request(self.base + "/login", data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "null", "Sec-Fetch-Site": "same-origin",
+        })
+        with self.assertRaises(HTTPError) as password_error:
+            urlopen(same_site)
+        self.assertEqual(password_error.exception.code, 401)
+        self.assertIn("Parola nu este corectă", password_error.exception.read().decode("utf-8"))
+
+    def test_database_session_survives_a_server_restart(self):
+        encoded_hash, salt = hash_password("Synthetic-Only-Cloud-Password")
+        old_server, old_thread = self.server, self.thread
+        port = old_server.server_port
+        old_server.shutdown(); old_server.server_close(); old_thread.join(timeout=2)
+        self.server = FinanceHTTPServer(
+            self.database, port, password_hash=encoded_hash, password_salt=salt,
+            public_origin="", secure_cookies=False,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        jar = CookieJar()
+        opener = build_opener(HTTPCookieProcessor(jar))
+        login_page = opener.open(self.base + "/login").read().decode("utf-8")
+        token = re.search(r'name="csrf" value="([^"]+)"', login_page).group(1)
+        body = urlencode({"csrf": token, "password": "Synthetic-Only-Cloud-Password"}).encode("utf-8")
+        request = Request(self.base + "/login", data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded", "Origin": self.base,
+        })
+        self.assertIn("Asistent Financiar Personal", opener.open(request).read().decode("utf-8"))
+        with closing(connect(self.database)) as db:
+            stored = db.execute("SELECT token_hash FROM auth_sessions").fetchone()[0]
+        session = next(cookie.value for cookie in jar if cookie.name == "finance_session")
+        self.assertNotEqual(stored, session)
+        old_server, old_thread = self.server, self.thread
+        old_server.shutdown(); old_server.server_close(); old_thread.join(timeout=2)
+        self.server = FinanceHTTPServer(
+            self.database, port, password_hash=encoded_hash, password_salt=salt,
+            public_origin="", secure_cookies=False,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.assertIn("Asistent Financiar Personal", opener.open(self.base + "/").read().decode("utf-8"))
+
+    def test_login_origin_error_is_shown_on_login_page(self):
+        encoded_hash, salt = hash_password("Synthetic-Only-Cloud-Password")
+        self.server.auth_password_hash = encoded_hash
+        self.server.password_salt = salt
+        self.server.public_origin = "https://finance.example/login"
+        login_page = urlopen(self.base + "/login").read().decode("utf-8")
+        token = re.search(r'name="csrf" value="([^"]+)"', login_page).group(1)
+        body = urlencode({"csrf": token, "password": "Synthetic-Only-Cloud-Password"}).encode("utf-8")
+        request = Request(self.base + "/login", data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://wrong-origin.example",
+        })
+        with self.assertRaises(HTTPError) as error:
+            urlopen(request)
+        self.assertEqual(error.exception.code, 400)
+        self.assertIn("Cererea externă a fost respinsă", error.exception.read().decode("utf-8"))
+
     def test_creasoft_report_upload_is_saved_without_inventing_period(self):
         content = (
             "Vendomat;Cantitate;Incasari totale (cash + non-cash - rest)\n"

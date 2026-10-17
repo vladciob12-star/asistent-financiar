@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS bank_balances (
  as_of TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS bank_balances_currency_date_idx ON bank_balances(currency,as_of,id);
+CREATE TABLE IF NOT EXISTS auth_sessions (
+ token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS auth_sessions_expiry_idx ON auth_sessions(expires_at);
 CREATE TABLE IF NOT EXISTS whatsapp_webhook_receipts (
  message_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL,
  claimed_until INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'processing'

@@ -61,6 +61,33 @@ def _valid_month(value: str) -> str:
     date.fromisoformat(value + "-01")
     return value
 
+def _origin_key(value: str, *, allow_path: bool = False) -> tuple[str, str, int] | None:
+    """Normalize an HTTP origin and safely ignore only a configured public URL path."""
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if (scheme not in {"http", "https"} or not hostname or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment):
+            return None
+        if not allow_path and parsed.path not in {"", "/"}:
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+        return scheme, hostname.casefold(), port
+    except ValueError:
+        return None
+
+def _host_key(value: str, scheme: str) -> tuple[str, int] | None:
+    """Normalize a Host header for the guarded opaque-Origin fallback."""
+    try:
+        parsed = urlsplit("//" + value)
+        if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+        return parsed.hostname.casefold(), port
+    except ValueError:
+        return None
+
 
 def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = "", authenticated: bool = False) -> str:
     month = _valid_month(month)
@@ -227,12 +254,18 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
         if not self.server.auth_password_hash:
             return True
         token = self._session_token()
-        expiry = self.server.sessions.get(token)
-        if expiry is None:
+        if not token:
             return False
-        if expiry <= time.time():
-            self.server.sessions.pop(token, None)
-            return False
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now = int(time.time())
+        with closing(connect(self.server.db_path)) as db:
+            row = db.execute("SELECT expires_at FROM auth_sessions WHERE token_hash=?", (token_hash,)).fetchone()
+            if row is None:
+                return False
+            if row["expires_at"] <= now:
+                db.execute("DELETE FROM auth_sessions WHERE token_hash=?", (token_hash,))
+                db.commit()
+                return False
         return True
 
     def _login_page(self, status: int = 200, message: str = "") -> None:
@@ -249,7 +282,21 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
         if not origin:
             return True
         expected = self.server.public_origin or f"http://{self.headers.get('Host', '')}"
-        return hmac.compare_digest(origin.rstrip("/"), expected.rstrip("/"))
+        expected_key = _origin_key(expected, allow_path=True)
+        if origin == "null":
+            # Opaque browser origins are accepted only when Fetch Metadata proves
+            # this is same-origin and the request Host matches the configured app.
+            request_host = _host_key(self.headers.get("Host", ""), expected_key[0]) if expected_key else None
+            return (
+                self.headers.get("Sec-Fetch-Site", "").lower() == "same-origin"
+                and expected_key is not None
+                and request_host is not None
+                and hmac.compare_digest(repr(request_host), repr(expected_key[1:]))
+            )
+        actual_key = _origin_key(origin)
+        return expected_key is not None and actual_key is not None and hmac.compare_digest(
+            repr(actual_key), repr(expected_key)
+        )
 
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
@@ -394,7 +441,13 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
                     self._login_page(401, "Parola nu este corectă.")
                     return
                 token = secrets.token_urlsafe(32)
-                self.server.sessions[token] = time.time() + 12 * 60 * 60
+                token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                now = int(time.time())
+                with closing(connect(self.server.db_path)) as db:
+                    db.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (now,))
+                    db.execute("INSERT INTO auth_sessions(token_hash,expires_at) VALUES(?,?)",
+                               (token_hash, now + 12 * 60 * 60))
+                    db.commit()
                 self.send_response(303)
                 self.send_header("Location", "/")
                 self.send_header("Set-Cookie", f"finance_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200" + ("; Secure" if self.server.secure_cookies else ""))
@@ -408,7 +461,12 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             if parsed.path == "/logout":
-                self.server.sessions.pop(self._session_token(), None)
+                token = self._session_token()
+                if token:
+                    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                    with closing(connect(self.server.db_path)) as db:
+                        db.execute("DELETE FROM auth_sessions WHERE token_hash=?", (token_hash,))
+                        db.commit()
                 self.send_response(303)
                 self.send_header("Location", "/login")
                 self.send_header("Set-Cookie", "finance_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" + ("; Secure" if self.server.secure_cookies else ""))
@@ -491,12 +549,20 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
                 return
             self._redirect(month, message)
         except (ValueError, OSError, TypeError, OverflowError) as exc:
+            if parsed.path == "/login":
+                self._login_page(400, str(exc))
+                return
             month = fields.get("month", date.today().strftime("%Y-%m")) if "fields" in locals() else date.today().strftime("%Y-%m")
             try:
                 month = _valid_month(month)
             except ValueError:
                 month = date.today().strftime("%Y-%m")
             self._redirect(month, f"Nu s-a putut procesa cererea: {exc}")
+        except Exception:
+            if parsed.path == "/login":
+                self._login_page(500, "Autentificarea nu a putut fi verificată din cauza unei erori interne. Încearcă din nou mai târziu.")
+                return
+            raise
 
     def _handle_whatsapp_webhook(self) -> None:
         config = self.server.whatsapp_config
@@ -578,16 +644,24 @@ class FinanceHTTPServer(ThreadingHTTPServer):
                 raise ValueError("Expunerea publică necesită APP_PASSWORD_HASH PBKDF2 valid.")
             if not re.fullmatch(r"[0-9a-f]{32}", password_salt):
                 raise ValueError("Expunerea publică necesită APP_PASSWORD_SALT valid.")
-            if not public_origin.startswith("https://") or not secure_cookies:
+            if (_origin_key(public_origin, allow_path=True) is None
+                    or _origin_key(public_origin, allow_path=True)[0] != "https" or not secure_cookies):
                 raise ValueError("Expunerea publică necesită APP_PUBLIC_URL HTTPS și cookie-uri Secure.")
         super().__init__((host, port), FinanceRequestHandler)
         self.db_path = db_path
-        self.csrf_token = secrets.token_urlsafe(32)
+        if (password_hash and re.fullmatch(r"pbkdf2_sha256\$600000\$[0-9a-f]{64}", password_hash)
+                and re.fullmatch(r"[0-9a-f]{32}", password_salt)):
+            csrf_key = password_hash.encode("ascii")
+            self.csrf_token = hmac.new(
+                csrf_key, b"finance-csrf\0" + bytes.fromhex(password_salt), hashlib.sha256
+            ).hexdigest()
+        else:
+            self.csrf_token = secrets.token_urlsafe(32)
         self.auth_password_hash = password_hash
         self.password_salt = password_salt
         self.public_origin = public_origin
         self.secure_cookies = secure_cookies
-        self.sessions: dict[str, float] = {}
+
         self.whatsapp_config = WhatsAppConfig.from_env()
 
 
