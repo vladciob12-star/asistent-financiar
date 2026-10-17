@@ -329,6 +329,20 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("Fișierul lipsește sau depășește limita de 10 MB.")
         content_type = self.headers.get("Content-Type", "")
         raw = self.rfile.read(length)
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        if media_type == "application/x-www-form-urlencoded":
+            try:
+                encoded_fields = parse_qs(
+                    raw.decode("utf-8"), keep_blank_values=True, strict_parsing=True,
+                    max_num_fields=100,
+                )
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise ValueError("Formularul nu este valid.") from exc
+            if any(len(values) != 1 for values in encoded_fields.values()):
+                raise ValueError("Formularul conține câmpuri duplicate.")
+            return {name: values[0] for name, values in encoded_fields.items()}, {}
+        if media_type != "multipart/form-data":
+            raise ValueError("Tipul formularului nu este acceptat.")
         message = BytesParser(policy=policy.default).parsebytes(
             f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("ascii") + raw
         )
