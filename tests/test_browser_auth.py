@@ -100,6 +100,7 @@ class BrowserAuthenticationTests(unittest.TestCase):
 
     def test_browser_login_keeps_session_across_redirect_and_restart(self):
         self.page.goto(self.base + "/login")
+        print("AUTH_DOCUMENT", self.page.url, self.page.evaluate("window.location.origin"))
         self.assertTrue(self.page.get_by_role("heading", name="Autentificare").is_visible())
         self._restart_server()
         self.page.get_by_label("Parolă").fill(self.password)
@@ -116,6 +117,7 @@ class BrowserAuthenticationTests(unittest.TestCase):
 
     def test_browser_shows_wrong_password_error(self):
         self.page.goto(self.base + "/login")
+        print("AUTH_DOCUMENT", self.page.url, self.page.evaluate("window.location.origin"))
         self.page.get_by_label("Parolă").fill("Definitely-Wrong-Synthetic-Password")
         self.page.get_by_role("button", name="Intră").click()
         alert = self.page.get_by_role("alert")
