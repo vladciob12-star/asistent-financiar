@@ -4,7 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from web_app import FinanceHTTPServer, hash_password
+from web_app import FinanceHTTPServer, hash_password, _origin_key
 
 try:
     from playwright.sync_api import sync_playwright
@@ -45,6 +45,17 @@ class BrowserAuthenticationTests(unittest.TestCase):
         self.base = f"http://127.0.0.1:{self.server.server_port}"
         # Mirror production, where Origin is checked against APP_PUBLIC_URL.
         self.server.public_origin = self.base
+        handler = self.server.RequestHandlerClass
+        if not hasattr(self, "_origin_check_original"):
+            self._origin_check_original = handler._origin_is_valid
+            original = self._origin_check_original
+            def trace_origin(instance):
+                actual = instance.headers.get("Origin")
+                expected = instance.server.public_origin
+                print("AUTH_ORIGIN_TRACE", repr(actual), repr(expected),
+                      repr(_origin_key(actual or "")), repr(_origin_key(expected, allow_path=True)))
+                return original(instance)
+            handler._origin_is_valid = trace_origin
 
     def _restart_server(self):
         old, thread, port = self.server, self.thread, self.server.server_port
@@ -62,6 +73,8 @@ class BrowserAuthenticationTests(unittest.TestCase):
             self.server.server_close()
         if self.thread is not None:
             self.thread.join(timeout=2)
+        if hasattr(self, "_origin_check_original"):
+            self.server.RequestHandlerClass._origin_is_valid = self._origin_check_original
         self.temp.cleanup()
 
     def test_browser_login_keeps_session_across_redirect_and_restart(self):
