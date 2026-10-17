@@ -116,7 +116,6 @@ class BrowserAuthenticationTests(unittest.TestCase):
 
     def test_browser_shows_wrong_password_error(self):
         self.page.goto(self.base + "/login")
-        print("AUTH_DOCUMENT", self.page.url, self.page.evaluate("window.location.origin"))
         self.page.get_by_label("Parolă").fill("Definitely-Wrong-Synthetic-Password")
         self.page.get_by_role("button", name="Intră").click()
         alert = self.page.get_by_role("alert")
