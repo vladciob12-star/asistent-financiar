@@ -1,0 +1,10 @@
+[Unit]
+Description=Encrypted SQLite backup for Asistent Financiar
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /srv/asistent-financiar/app/deploy/oracle/backup-daily.sh
+User=root
+UMask=0077
