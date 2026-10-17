@@ -53,12 +53,13 @@ class WhatsAppConfig:
 
     @property
     def webhook_ready(self) -> bool:
-        return bool(self.enable_messaging and self.verify_token and self.app_secret and self.allowed_senders)
+        return bool(self.enable_messaging and self.verify_token and self.app_secret and self.allowed_senders
+                    and self.access_token and self.phone_number_id
+                    and GRAPH_VERSION_RE.fullmatch(self.api_version))
 
     @property
     def messaging_ready(self) -> bool:
-        return bool(self.webhook_ready and self.access_token and self.phone_number_id
-                    and GRAPH_VERSION_RE.fullmatch(self.api_version))
+        return self.webhook_ready
 
 
 class MetaAPIError(RuntimeError):
