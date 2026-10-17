@@ -137,6 +137,33 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("Asistent Financiar Personal", logged_in)
 
 
+    def test_opaque_origin_requires_same_origin_fetch_metadata_and_matching_host(self):
+        encoded_hash, salt = hash_password("Synthetic-Only-Cloud-Password")
+        self.server.auth_password_hash = encoded_hash
+        self.server.password_salt = salt
+        self.server.public_origin = f"https://127.0.0.1:{self.server.server_port}/login"
+        login_page = urlopen(self.base + "/login").read().decode("utf-8")
+        token = re.search(r'name="csrf" value="([^"]+)"', login_page).group(1)
+        body = urlencode({"csrf": token, "password": "Definitely-Wrong-Synthetic-Password"}).encode("utf-8")
+
+        cross_site = Request(self.base + "/login", data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "null", "Sec-Fetch-Site": "cross-site",
+        })
+        with self.assertRaises(HTTPError) as rejected:
+            urlopen(cross_site)
+        self.assertEqual(rejected.exception.code, 400)
+        self.assertIn("Cererea externă a fost respinsă", rejected.exception.read().decode("utf-8"))
+
+        same_site = Request(self.base + "/login", data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "null", "Sec-Fetch-Site": "same-origin",
+        })
+        with self.assertRaises(HTTPError) as password_error:
+            urlopen(same_site)
+        self.assertEqual(password_error.exception.code, 401)
+        self.assertIn("Parola nu este corectă", password_error.exception.read().decode("utf-8"))
+
     def test_database_session_survives_a_server_restart(self):
         encoded_hash, salt = hash_password("Synthetic-Only-Cloud-Password")
         old_server, old_thread = self.server, self.thread
