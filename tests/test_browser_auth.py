@@ -100,7 +100,6 @@ class BrowserAuthenticationTests(unittest.TestCase):
 
     def test_browser_login_keeps_session_across_redirect_and_restart(self):
         self.page.goto(self.base + "/login")
-        print("AUTH_DOCUMENT", self.page.url, self.page.evaluate("window.location.origin"))
         self.assertTrue(self.page.get_by_role("heading", name="Autentificare").is_visible())
         self._restart_server()
         self.page.get_by_label("Parolă").fill(self.password)
