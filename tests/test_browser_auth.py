@@ -27,6 +27,9 @@ class BrowserAuthenticationTests(unittest.TestCase):
         self.browser = self.playwright.chromium.launch(headless=True)
         self.context = self.browser.new_context()
         self.page = self.context.new_page()
+        self.page.on("request", lambda request: print(
+            "AUTH_BROWSER_REQUEST", request.url, request.headers.get("origin")
+        ) if request.url.endswith("/login") else None)
 
     def _start_server(self, port=0):
         self.server = FinanceHTTPServer(
