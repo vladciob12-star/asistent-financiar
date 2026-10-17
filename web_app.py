@@ -628,11 +628,11 @@ class FinanceHTTPServer(ThreadingHTTPServer):
                 raise ValueError("Expunerea publică necesită APP_PUBLIC_URL HTTPS și cookie-uri Secure.")
         super().__init__((host, port), FinanceRequestHandler)
         self.db_path = db_path
-        if (password_hash and re.fullmatch(r"pbkdf2_sha256\\$600000\\$[0-9a-f]{64}", password_hash)
+        if (password_hash and re.fullmatch(r"pbkdf2_sha256\$600000\$[0-9a-f]{64}", password_hash)
                 and re.fullmatch(r"[0-9a-f]{32}", password_salt)):
             csrf_key = password_hash.encode("ascii")
             self.csrf_token = hmac.new(
-                csrf_key, b"finance-csrf\\0" + bytes.fromhex(password_salt), hashlib.sha256
+                csrf_key, b"finance-csrf\0" + bytes.fromhex(password_salt), hashlib.sha256
             ).hexdigest()
         else:
             self.csrf_token = secrets.token_urlsafe(32)
