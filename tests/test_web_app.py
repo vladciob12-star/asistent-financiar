@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen, build_opener, HTTPCookieProcessor, HTTPRedirectHandler
 from urllib.error import HTTPError
 from http.cookiejar import CookieJar
+from urllib.parse import urlencode
 
 from booking_imports import HEADERS
 from finance_store import connect
@@ -118,9 +119,9 @@ class WebAppTests(unittest.TestCase):
         with closing(connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM imports").fetchone()[0], 0)
 
-        boundary, body = multipart({"csrf": token, "password": "Synthetic-Only-Cloud-Password"})
+        body = urlencode({"csrf": token, "password": "Synthetic-Only-Cloud-Password"}).encode("utf-8")
         request = Request(self.base + "/login", data=body, headers={
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Type": "application/x-www-form-urlencoded",
             "Origin": "https://finance.example",
         })
         try:
