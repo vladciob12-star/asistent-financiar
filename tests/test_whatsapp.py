@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+import os
 from contextlib import closing
 from pathlib import Path
 from urllib.error import HTTPError
@@ -171,6 +172,12 @@ class WhatsAppTests(unittest.TestCase):
         signature = "sha256=" + hmac.new(APP_SECRET.encode(), raw, hashlib.sha256).hexdigest()
         self.assertTrue(verify_signature(APP_SECRET, raw, signature))
         self.assertFalse(verify_signature(APP_SECRET, raw + b" ", signature))
+
+    def test_messaging_is_disabled_until_every_meta_credential_is_configured(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = WhatsAppConfig.from_env()
+        self.assertFalse(config.webhook_ready)
+        self.assertFalse(config.messaging_ready)
 
     def test_meta_text_client_uses_configured_graph_api_and_bearer_token(self):
         captured = []
