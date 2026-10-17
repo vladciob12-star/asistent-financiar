@@ -13,6 +13,8 @@ Nucleu local de import și registru financiar în dezvoltare. Datele rămân loc
 - Reimportul aceluiași fișier este idempotent. Înregistrările similare necerte sunt păstrate și semnalate.
 - Profil Docker/Render cu autentificare cloud obligatorie, health check și cale de bază de date configurabilă.
 - Snapshot-uri Render automate zilnice și criptate pentru discul persistent; utilitar separat pentru backup/restaurare SQLite AES-256-GCM, rulat la comandă. Nu este configurată o destinație externă automată.
+- Integrare pregătită pentru Meta WhatsApp Cloud API: verificare challenge și HMAC, expeditori autorizați, deduplicare și răspunsuri doar agregate. Dezactivată până la configurarea secretelor Meta.
+- Rapoartele PDF pot fi trimise numai ca răspuns la cererea explicită a expeditorului autorizat, în fereastra de 24 de ore; nu există trimitere programată.
 
 ## Comenzi locale
 
@@ -34,11 +36,21 @@ Creasoft nu intră în totalurile lunare dacă raportul nu oferă perioada; valo
 
 Comparativul de costuri, profilul Render, condițiile WhatsApp/Creasoft/Booking și pașii de activare sunt în [docs/cloud-readiness.md](docs/cloud-readiness.md). render.yaml este doar un blueprint; nu a fost creat niciun serviciu cloud. Discul persistent trebuie montat la /var/data. Publicarea pe internet cere APP_PASSWORD_HASH, APP_PASSWORD_SALT și APP_PUBLIC_URL HTTPS; bind-ul public fără ele eșuează intenționat.
 
+Pentru planul de 0 lei/lună și configurația OCI Always Free neactivată, vezi [docs/oracle-always-free.md](docs/oracle-always-free.md) și fișierele din [deploy/oracle](deploy/oracle). Configurația nu creează resurse sau conturi.
+
 Pentru a configura hash-ul parolei în mod interactiv:
 
     python web_app.py --hash-password
 
 Păstrează ambele valori afișate ca secrete în furnizorul cloud și adaugă URL-ul HTTPS final. Nu le comite în Git.
+
+## WhatsApp Business (neconectat)
+
+Implementarea folosește direct Meta WhatsApp Cloud API, fără BSP. Pentru configurare cere un webhook HTTPS la `/webhook/whatsapp`, token de verificare, App Secret, access token, Phone Number ID, versiunea Graph API și allowlist-ul propriilor numere. Toate valorile sunt secrete în mediul serviciului și nu sunt comise. `WHATSAPP_ENABLE_MESSAGING=false` și `WHATSAPP_ALLOW_REPORTS=false` rămân valorile implicite; integrarea nu trimite și nu primește mesaje până la activarea explicită.
+
+Comenzi acceptate: `/ajutor`, întrebări despre venituri/cheltuieli/profit estimat/sold disponibil și `/raport AAAA-LL`. Răspunsurile sunt calcule deterministe din agregate SQLite, fără model AI, fără descrieri de tranzacții și fără conversii valutare. Raportul PDF se livrează doar la cerere, într-un răspuns la mesajul primit în ultimele 24 de ore. Trimiterile automate în afara ferestrei nu sunt implementate; Meta cere șabloane aprobate pentru inițierea sau reluarea conversației și acestea pot avea cost.
+
+Webhook-ul procesează doar mesaje text. Imaginile/documentele trimise pe WhatsApp sunt ignorate; extrasele bancare continuă să fie importate numai manual prin aplicație. Mesajele brute, numerele de telefon și conținutul financiar al webhook-ului nu se salvează; SQLite păstrează ID-uri de mesaj pentru deduplicarea livrărilor repetate.
 
 Exemplu de backup criptat, rulat pe instanța care poate accesa baza:
 
@@ -80,6 +92,6 @@ python -m unittest discover -s tests -v
 
 ## Limite și pașii rămași
 
-Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. Nu există webhook WhatsApp sau API Creasoft/Booking conectate. Hostingul este doar pregătit, nu activat. Snapshot-urile Render sunt automate în cazul unui deploy cu disc persistent; nu este configurată o copie criptată off-site.
+Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. WhatsApp, Creasoft API și Booking API nu sunt conectate. Hostingul este doar pregătit, nu activat. Snapshot-urile Render sunt automate în cazul unui deploy cu disc persistent; nu este configurată o copie criptată off-site.
 
 Rapoartele și fișierele financiare locale sunt excluse din Git prin `.gitignore`. Nu folosi date demonstrative drept tranzacții reale.
