@@ -1,0 +1,41 @@
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_HOST: 0.0.0.0
+      PORT: 10000
+      DATABASE_PATH: /var/data/finante.sqlite3
+    volumes:
+      - /srv/asistent-financiar/data:/var/data
+    expose:
+      - "10000"
+    networks:
+      - private
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: caddy.env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - private
+
+networks:
+  private:
+
+volumes:
+  caddy_data:
+  caddy_config:

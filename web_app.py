@@ -37,6 +37,8 @@ from finance_store import (
 )
 from financial_imports import import_csv, import_xlsx, load_mapping
 from main import citeste_raport
+from whatsapp import (MAX_WEBHOOK_BYTES, MetaAPIError, MetaCloudAPI, WhatsAppConfig,
+                      parse_text_messages, process_message, verify_signature)
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -251,6 +253,19 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
+        if parsed.path == "/webhook/whatsapp":
+            config = self.server.whatsapp_config
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            mode = params.get("hub.mode", [""])[0]
+            token = params.get("hub.verify_token", [""])[0]
+            challenge = params.get("hub.challenge", [""])[0]
+            if (config.verify_token and mode == "subscribe" and
+                    secrets.compare_digest(token, config.verify_token) and
+                    challenge and len(challenge) <= 256 and challenge.isascii()):
+                self._send(200, challenge, "text/plain; charset=utf-8")
+            else:
+                self._send(403, "forbidden", "text/plain; charset=utf-8")
+            return
         if parsed.path == "/healthz":
             try:
                 with closing(connect(self.server.db_path)) as db:
@@ -341,6 +356,9 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
+        if parsed.path == "/webhook/whatsapp":
+            self._handle_whatsapp_webhook()
+            return
         if self.server.auth_password_hash and parsed.path not in {"/login", "/logout"} and not self._is_authenticated():
             self.send_response(303)
             self.send_header("Location", "/login")
@@ -466,6 +484,56 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
                 month = date.today().strftime("%Y-%m")
             self._redirect(month, f"Nu s-a putut procesa cererea: {exc}")
 
+    def _handle_whatsapp_webhook(self) -> None:
+        config = self.server.whatsapp_config
+        if not config.webhook_ready:
+            self._send(503, "webhook not configured", "text/plain; charset=utf-8")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send(400, "invalid request", "text/plain; charset=utf-8")
+            return
+        if length <= 0 or length > MAX_WEBHOOK_BYTES:
+            self._send(413, "payload too large", "text/plain; charset=utf-8")
+            return
+        body = self.rfile.read(length)
+        if len(body) != length or not verify_signature(
+                config.app_secret, body, self.headers.get("X-Hub-Signature-256", "")):
+            self._send(401, "invalid signature", "text/plain; charset=utf-8")
+            return
+        try:
+            payload = json.loads(body)
+            messages = parse_text_messages(payload)
+            api = MetaCloudAPI(config) if config.messaging_ready else None
+
+            def send_text(recipient: str, text: str) -> None:
+                if api is None:
+                    raise MetaAPIError("Mesageria WhatsApp neconfigurată.")
+                api.send_text(recipient, text)
+
+            def send_pdf(recipient: str, path: Path, caption: str) -> None:
+                if api is None:
+                    raise MetaAPIError("Mesageria WhatsApp neconfigurată.")
+                api.send_pdf(recipient, path, caption)
+
+            from finance_store import write_monthly_pdf_report
+            with closing(connect(self.server.db_path)) as db:
+                for message in messages:
+                    process_message(db, message, config, int(time.time()), send_text, send_pdf,
+                                    write_monthly_pdf_report)
+        except MetaAPIError:
+            self._send(502, "message delivery failed", "text/plain; charset=utf-8")
+            return
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+            self._send(400, "invalid webhook payload", "text/plain; charset=utf-8")
+            return
+        except Exception:
+            # Do not leak financial data, webhook payloads, phone numbers, or API responses.
+            self._send(500, "webhook processing failed", "text/plain; charset=utf-8")
+            return
+        self._send(200, "EVENT_RECEIVED", "text/plain; charset=utf-8")
+
 
 def hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
     """Create a PBKDF2-SHA256 hash for APP_PASSWORD_HASH configuration."""
@@ -506,6 +574,7 @@ class FinanceHTTPServer(ThreadingHTTPServer):
         self.public_origin = public_origin
         self.secure_cookies = secure_cookies
         self.sessions: dict[str, float] = {}
+        self.whatsapp_config = WhatsAppConfig.from_env()
 
 
 def main() -> int:

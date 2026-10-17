@@ -20,11 +20,16 @@ Evaluare din 16 octombrie 2026. Documentația cloud completă și comparația co
 
 ## Integrare WhatsApp Business oficială
 
-Canalul pregătit pentru o eventuală versiune viitoare este Meta WhatsApp Business Platform Cloud API, fără BSP terț. Activarea necesită cont Meta Business/developer, WABA, număr autorizat și înregistrat, token de sistem cu permisiuni potrivite, adresă webhook publică HTTPS și verificarea callback-ului/semnăturii Meta. Trebuie decis și verificat ce expeditori sunt autorizați.
+Codul pentru Meta WhatsApp Business Platform Cloud API este implementat, dar integrarea rămâne **neconectată și dezactivată** până când proprietarul completează secretele și setează `WHATSAPP_ENABLE_MESSAGING=true`. Nu folosește BSP.
 
-Implementarea trebuie să valideze semnătura webhook, să respingă payloadurile nerecunoscute, să limiteze expeditorii și să evite logarea conținutului mesajelor. Nu ar trebui acceptate extrase bancare prin WhatsApp în această arhitectură; regula rămâne încărcarea manuală directă de către proprietar.
+- `GET /webhook/whatsapp` verifică `hub.verify_token` și răspunde cu challenge-ul numai când tokenul corespunde.
+- `POST /webhook/whatsapp` validează HMAC-SHA256 `X-Hub-Signature-256` pe bytes originali cu Meta App Secret; limitează corpul la 1 MB și acceptă numai evenimente WhatsApp Business Account.
+- Sunt procesate numai mesaje text de la numerele din `WHATSAPP_ALLOWED_SENDERS`. Mesajele media sunt ignorate, deci extrasele bancare nu pot fi importate prin WhatsApp.
+- Se salvează doar ID-urile mesajelor pentru deduplicarea retrimiterilor Meta și se șterg după 30 zile; nu se salvează textul sau numărul expeditorului. Logurile HTTP nu includ payloadul.
+- Răspunsurile sunt deterministe și agregate din SQLite: venituri, cheltuieli, profit estimat și sold introdus manual; nu sunt expuse tranzacții individuale și nu se face conversie monetară.
+- Raportul PDF poate fi trimis numai la comanda explicită `/raport AAAA-LL` de la expeditorul autorizat. `WHATSAPP_ALLOW_REPORTS` este `false` implicit, iar comanda necesită mesaj primit în ultimele 24 de ore. Nu există scheduler pentru rapoarte și nu sunt implementate mesaje-template/out-of-window.
 
-Meta stabilește tariful după mesajul livrat, piață și categorie. Pagina oficială consultată descrie mesaje de marketing, utility, authentication și service și arată că unele răspunsuri service/utility au cost zero, dar tarifele și condițiile se pot schimba. Înainte de a trimite automat orice mesaj trebuie verificat rate card-ul curent pentru piața și categoria exactă și aprobat bugetul. Nicio trimitere nu este activă.
+Activarea necesită Meta Business Portfolio, aplicație Meta cu produs WhatsApp, WABA, număr business eligibil/înregistrat, webhook public HTTPS și abonarea aplicației la `messages`, token system-user cu `whatsapp_business_messaging`, App Secret, Verify Token și allowlist de numere. Proprietarul trebuie să verifice prețul curent Meta și regulile de consimțământ înainte de a trimite mesaje; nu a fost activată nicio conexiune și codul nu pretinde că funcționează cu Meta până la această configurare.
 
 ## Creasoft
 
