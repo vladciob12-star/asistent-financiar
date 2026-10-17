@@ -37,6 +37,8 @@ class BrowserAuthenticationTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
+        # Mirror production, where Origin is checked against APP_PUBLIC_URL.
+        self.server.public_origin = self.base
 
     def _restart_server(self):
         old, thread, port = self.server, self.thread, self.server.server_port
