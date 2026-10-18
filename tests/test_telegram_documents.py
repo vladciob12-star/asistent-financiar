@@ -24,6 +24,23 @@ def booking_csv():
     return output.getvalue().encode()
 
 
+def booking_csv_mixed_currencies():
+    content = booking_csv().decode()
+    reader = csv.DictReader(io.StringIO(content))
+    fields = list(reader.fieldnames)
+    rows = list(reader)
+    second = dict(rows[0])
+    second.update({HEADERS["record_type"]: "(Payout)", HEADERS["reference"]: "FAKE-REF-EUR",
+                   HEADERS["gross"]: "20,00", HEADERS["commission"]: "-2,00",
+                   HEADERS["transaction_currency"]: "EUR", HEADERS["payout_value"]: "3,00",
+                   HEADERS["payout_currency"]: "EUR", HEADERS["payout_date"]: "05.09.2026"})
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(rows + [second])
+    return output.getvalue().encode()
+
+
 class TelegramDocumentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -64,6 +81,12 @@ class TelegramDocumentTests(unittest.TestCase):
     def test_document_row_limit_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "5000 de rânduri"):
             _check_rows([None] * 5001)
+
+    def test_booking_preview_never_combines_currencies(self):
+        _, summary, _ = analyze_document(77, "mixed.csv", booking_csv_mixed_currencies(), now=4500)
+        self.assertIn("-2.00 EUR; -15.00 RON", summary)
+        self.assertIn("3.00 EUR", summary)
+        self.assertNotIn("3.00 RON", summary)
 
     def test_creasoft_csv_preview_notes_cash_and_period_limits(self):
         content = "Vendomat;Cantitate;Incasari totale (cash + non-cash - rest)\nOradea Era;3;45,00\n".encode()
