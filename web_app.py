@@ -35,7 +35,7 @@ from finance_store import (
     record_bank_balance,
     write_monthly_pdf_report,
 )
-from financial_imports import import_csv, import_xlsx, load_mapping
+from financial_imports import import_csv, import_mt940, import_xlsx, load_mapping
 from main import citeste_raport
 from whatsapp import (MAX_WEBHOOK_BYTES, MetaAPIError, MetaCloudAPI, WhatsAppConfig,
                       parse_text_messages, process_message, verify_signature)
@@ -210,7 +210,7 @@ def render_dashboard(db_path: Path, month: str, csrf_token: str, message: str = 
 <div class="metrics">{incomes}{expenses}{profit}{available}{bank_funds}{receivables}{payout_candidates}</div></section>
 <section class="panel"><h2>Import Creasoft</h2><form method="post" action="/import/creasoft" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><input type="file" name="file" accept=".csv,text/csv" required><button>Importă raportul CSV</button></form><p class="safety">Totalurile combinate cash + non-cash nu sunt interpretate ca numerar fizic. Perioada nu este dedusă dacă lipsește din raport.</p></section>
 <section class="panel"><h2>Import raport financiar Booking.com</h2><form method="post" action="/import/booking" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><input type="file" name="file" accept=".csv,text/csv" required><button>Importă raportul CSV</button></form><p class="safety">Plățile rămân neconfirmate până la asocierea cu extrasul bancar și confirmarea ta.</p></section>
-<section class="panel"><h2>Import extras bancar</h2><form method="post" action="/import/bank" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><label class="mapping">Fișier CSV sau XLSX: <input type="file" name="file" accept=".csv,.xlsx" required></label><label class="mapping">Maparea JSON cu antetele exacte ale extrasului:</label><textarea name="mapping" required>{_e(json.dumps(DEFAULT_MAPPING,ensure_ascii=False,indent=2))}</textarea><button>Importă și salvează în registru</button></form><p class="safety">Câmpurile nemapate rămân neclasificate. Completează DATA, DESCRIERE și SUMA cu antetele reale ale fișierului; nu sunt presupuse formatele băncii.</p></section>
+<section class="panel"><h2>Import extras bancar</h2><form method="post" action="/import/bank" enctype="multipart/form-data">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><label class="mapping">Fișier CSV, XLSX sau MT940 (.sta, .940, .mt940): <input type="file" name="file" accept=".csv,.xlsx,.sta,.940,.mt940" required></label><label class="mapping">Maparea JSON pentru CSV/XLSX (MT940 nu necesită mapare):</label><textarea name="mapping">{_e(json.dumps(DEFAULT_MAPPING,ensure_ascii=False,indent=2))}</textarea><button>Importă și salvează în registru</button></form><p class="safety">Importul extraselor rămâne manual. La MT940, suma și moneda sunt citite din fișier; tranzacțiile rămân neclasificate, iar soldul se introduce separat din extras.</p></section>
 <section class="panel"><h2>Sold bancar disponibil</h2><form class="inline" method="post" action="/bank-balance">{form_token()}<input type="hidden" name="month" value="{_e(month)}"><label>Sold din extras: <input name="amount" inputmode="decimal" required aria-label="Sold bancar"></label><label>Monedă: <input name="currency" value="RON" minlength="3" maxlength="3" required></label><label>Valabil la: <input type="date" name="as_of" value="{date.today().isoformat()}" required></label><button>Salvează soldul</button></form><p class="safety">Soldul se introduce manual din extras. Aplicația nu se conectează la bancă; încasările lunii și creanțele nu sunt sold disponibil.</p></section>
 <section class="panel"><h2>Raport lunar</h2><a href="/report.pdf?month={_e(month)}">Descarcă raportul PDF pentru {_e(month)}</a></section>
 <section class="panel"><h2>Situația financiară · {_e(month)}</h2><div class="scroll"><table><thead><tr><th>Activitate</th><th>Monedă</th><th>Venit</th><th>Cheltuieli</th><th>Comisioane</th><th>Rezultat estimat</th></tr></thead><tbody>{''.join(activity_rows)}</tbody></table></div><p class="safety">Rezultatele se calculează doar din tranzacțiile clasificate și sunt estimative. Nu se fac conversii între monede.</p></section>
@@ -506,20 +506,24 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
                     message = f"Booking: importate {count} rânduri; plățile propuse nu sunt confirmate automat."
                 else:
                     suffix = Path(filename).suffix.lower()
-                    if suffix not in {".csv", ".xlsx"}:
-                        raise ValueError("Extrasul bancar trebuie să fie CSV sau XLSX.")
-                    try:
-                        mapping_data = json.loads(fields.get("mapping", ""))
-                    except json.JSONDecodeError as exc:
-                        raise ValueError("Maparea trebuie să fie JSON valid.") from exc
+                    if suffix not in {".csv", ".xlsx", ".sta", ".940", ".mt940"}:
+                        raise ValueError("Extrasul bancar trebuie să fie CSV, XLSX sau MT940.")
                     with tempfile.TemporaryDirectory(prefix="asistent-financiar-") as folder:
                         path = Path(folder) / filename
                         path.write_bytes(content)
-                        mapping_path = Path(folder) / "mapping.json"
-                        mapping_path.write_text(json.dumps(mapping_data, ensure_ascii=False), encoding="utf-8")
-                        mapping = load_mapping(mapping_path)
-                        records = import_xlsx(path, mapping) if suffix == ".xlsx" else import_csv(path, mapping)
-                    has_settlement_mapping = "settlement" in mapping["columns"]
+                        if suffix in {".sta", ".940", ".mt940"}:
+                            mapping = None
+                            records = import_mt940(path)
+                        else:
+                            try:
+                                mapping_data = json.loads(fields.get("mapping", ""))
+                            except json.JSONDecodeError as exc:
+                                raise ValueError("Maparea trebuie să fie JSON valid.") from exc
+                            mapping_path = Path(folder) / "mapping.json"
+                            mapping_path.write_text(json.dumps(mapping_data, ensure_ascii=False), encoding="utf-8")
+                            mapping = load_mapping(mapping_path)
+                            records = import_xlsx(path, mapping) if suffix == ".xlsx" else import_csv(path, mapping)
+                    has_settlement_mapping = bool(mapping and "settlement" in mapping["columns"])
                     observations = [Observation(
                         source="bank", occurred_on=row.transaction_date, description=row.description,
                         amount=row.amount, currency=row.currency, activity=row.activity, kind=row.kind,
