@@ -39,6 +39,9 @@ from financial_imports import import_csv, import_xlsx, load_mapping
 from main import citeste_raport
 from whatsapp import (MAX_WEBHOOK_BYTES, MetaAPIError, MetaCloudAPI, WhatsAppConfig,
                       parse_text_messages, process_message, verify_signature)
+from telegram_bot import (MAX_WEBHOOK_BYTES as MAX_TELEGRAM_WEBHOOK_BYTES, TelegramAPIError,
+                          TelegramBotAPI, TelegramConfig, process_update, set_webhook,
+                          verify_webhook_secret)
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -420,6 +423,9 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/webhook/whatsapp":
             self._handle_whatsapp_webhook()
             return
+        if parsed.path == "/webhook/telegram":
+            self._handle_telegram_webhook()
+            return
         if self.server.auth_password_hash and parsed.path not in {"/login", "/logout"} and not self._is_authenticated():
             self.send_response(303)
             self.send_header("Location", "/login")
@@ -614,6 +620,44 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
             return
         self._send(200, "EVENT_RECEIVED", "text/plain; charset=utf-8")
 
+    def _handle_telegram_webhook(self) -> None:
+        config = self.server.telegram_config
+        if not config.webhook_ready:
+            self._send(503, "webhook not configured", "text/plain; charset=utf-8")
+            return
+        if not verify_webhook_secret(config, self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")):
+            self._send(401, "invalid webhook secret", "text/plain; charset=utf-8")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send(400, "invalid request", "text/plain; charset=utf-8")
+            return
+        if length <= 0 or length > MAX_TELEGRAM_WEBHOOK_BYTES:
+            self._send(413, "payload too large", "text/plain; charset=utf-8")
+            return
+        body = self.rfile.read(length)
+        if len(body) != length:
+            self._send(400, "invalid request", "text/plain; charset=utf-8")
+            return
+        try:
+            update = json.loads(body)
+            api = TelegramBotAPI(config)
+            from finance_store import write_monthly_pdf_report
+            with closing(connect(self.server.db_path)) as db:
+                process_update(db, update, config, int(time.time()), api, write_monthly_pdf_report)
+        except TelegramAPIError:
+            self._send(502, "message delivery failed", "text/plain; charset=utf-8")
+            return
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+            self._send(400, "invalid webhook payload", "text/plain; charset=utf-8")
+            return
+        except Exception:
+            # Do not leak financial data, chat IDs, bot tokens, or API responses.
+            self._send(500, "webhook processing failed", "text/plain; charset=utf-8")
+            return
+        self._send(200, "OK", "text/plain; charset=utf-8")
+
 
 def hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
     """Create a PBKDF2-SHA256 hash for APP_PASSWORD_HASH configuration."""
@@ -663,6 +707,16 @@ class FinanceHTTPServer(ThreadingHTTPServer):
         self.secure_cookies = secure_cookies
 
         self.whatsapp_config = WhatsAppConfig.from_env()
+        self.telegram_config = TelegramConfig.from_env()
+        self.telegram_webhook_setup_ok = False
+        if (self.telegram_config.webhook_ready
+                and os.environ.get("TELEGRAM_CONFIGURE_WEBHOOK_ON_START", "").casefold() == "true"):
+            try:
+                set_webhook(self.telegram_config, self.public_origin)
+                self.telegram_webhook_setup_ok = True
+                print("Telegram webhook configured.")
+            except (TelegramAPIError, ValueError):
+                print("Telegram webhook setup failed; check its configuration in Railway.")
 
 
 def main() -> int:
@@ -703,3 +757,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
