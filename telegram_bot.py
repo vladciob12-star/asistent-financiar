@@ -342,6 +342,17 @@ def process_update(db, update: object, config: TelegramConfig, now: int, api: Te
         return "unauthorized"
     text = message.get("text")
     document = message.get("document")
+    photo = message.get("photo")
+    if isinstance(photo, list) and photo:
+        if not claim_update(db, update_id, now):
+            return "duplicate"
+        try:
+            api.send_text(chat_id, "Nu pot citi fotografii sau bonuri în siguranță încă. Nu am descărcat și nu am salvat imaginea; nu folosesc OCR sau servicii AI externe.")
+            complete_update(db, update_id)
+            return "unsupported_photo"
+        except Exception:
+            release_update(db, update_id)
+            raise
     if not isinstance(text, str) and not isinstance(document, dict):
         return "ignored"
     if isinstance(text, str) and (not text.strip() or len(text) > 2000):
