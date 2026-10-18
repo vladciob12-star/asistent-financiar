@@ -115,8 +115,8 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(len(FakeTelegramAPI.sent_text), 1)
         chat_id, answer = FakeTelegramAPI.sent_text[0]
         self.assertEqual(chat_id, OWNER_ID)
-        self.assertIn("125.50 RON", answer)
-        self.assertIn("Venituri clasificate", answer)
+        self.assertIn("125,50 lei", answer)
+        self.assertIn("Venituri înregistrate", answer)
         self.assertNotIn("Synthetic income", answer)
         self.assertIn("Ultima actualizare a datelor:", answer)
         with closing(connect(self.database)) as db:
@@ -164,9 +164,9 @@ class TelegramTests(unittest.TestCase):
         with closing(connect(self.database)) as db:
             answer, report = answer_message(db, "Câți bani am acum?", int(time.time()), False)
         self.assertIsNone(report)
-        self.assertIn("sold bancar necunoscut", answer)
-        self.assertIn("Numerarul din tonomatele ERA și Crișul nu poate fi stabilit", answer)
-        self.assertIn("nu sunt incluse în banii disponibili", answer)
+        self.assertIn("soldul nu a fost introdus manual", answer)
+        self.assertIn("numerarul din aparate nu este cunoscut", answer)
+        self.assertIn("sumele Booking sunt separate", answer)
 
     def test_era_and_crisul_names_route_to_their_synthetic_creasoft_reports(self):
         with closing(connect(self.database)) as db:
@@ -178,10 +178,27 @@ class TelegramTests(unittest.TestCase):
                 "Crișul Shopping Center — Oradea": {"cantitate": 3, "incasari": 27.00},
             })
             crius, _ = answer_message(db, "Cât a produs tonomatul de la Crișul?", int(time.time()), False)
-        self.assertIn("40.00 RON", era)
-        self.assertIn("nu reprezintă banii disponibili", era)
+        self.assertIn("40,00 lei", era)
+        self.assertIn("soldul aparatului nu poate fi stabilit", era)
         self.assertIn("al doilea tonomat", crius)
-        self.assertIn("27.00 RON", crius)
+        self.assertIn("27,00 lei", crius)
+
+    def test_financial_answers_are_short_and_show_bank_confirmed_income(self):
+        with closing(connect(self.database)) as db:
+            answer, report = answer_message(db, "Cât am încasat?", int(time.time()), False)
+        self.assertIsNone(report)
+        self.assertTrue(answer.startswith("Raport financiar — "))
+        self.assertIn("Venituri înregistrate:", answer)
+        self.assertIn("Încasat confirmat în bancă:", answer)
+        self.assertIn("Concluzie:", answer)
+
+    def test_situation_report_answers_all_five_financial_questions(self):
+        with closing(connect(self.database)) as db:
+            answer, report = answer_message(db, "/situatie", int(time.time()), False)
+        self.assertIsNone(report)
+        for label in ("Bani disponibili:", "Încasat confirmat în bancă:", "Cheltuieli:",
+                      "Profit estimat:", "De primit de la Booking:"):
+            self.assertIn(label, answer)
 
     def test_webhook_secret_validation_and_config_are_fail_closed(self):
         self.assertTrue(verify_webhook_secret(self.server.telegram_config, WEBHOOK_SECRET))
