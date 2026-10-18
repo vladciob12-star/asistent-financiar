@@ -204,7 +204,7 @@ def financial_answer(db, text: str, now: int) -> tuple[str, str | None]:
         title, values = "Venituri clasificate", incomes
     else:
         return ("Nu am identificat întrebarea. Scrie /ajutor pentru comenzile acceptate. "
-                "Nu trimit extrase, descrieri individuale sau clasificări incerte pe WhatsApp.", None)
+                "Nu trimit extrase, descrieri individuale sau clasificări incerte prin mesagerie.", None)
     formatted = "; ".join(f"{amount:.2f} {currency}" for currency, amount in sorted(values.items())) or "nu există valori clasificate"
     return (f"{title} pentru {month}: {formatted}. Valori agregate, estimative și fără conversie între monede.", None)
 
@@ -293,3 +293,5 @@ def parse_text_messages(payload: object) -> list[dict]:
                     if isinstance(message, dict):
                         messages.append(message)
     return messages
+
+

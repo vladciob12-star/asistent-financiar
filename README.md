@@ -52,6 +52,14 @@ Comenzi acceptate: `/ajutor`, întrebări despre venituri/cheltuieli/profit esti
 
 Webhook-ul procesează doar mesaje text. Imaginile/documentele trimise pe WhatsApp sunt ignorate; extrasele bancare continuă să fie importate numai manual prin aplicație. Mesajele brute, numerele de telefon și conținutul financiar al webhook-ului nu se salvează; SQLite păstrează ID-uri de mesaj pentru deduplicarea livrărilor repetate.
 
+## Telegram (implementat, neconectat)
+
+Endpointul separat `/webhook/telegram` folosește Telegram Bot API prin webhook HTTPS. Integrarea este dezactivată până la configurarea `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_USER_IDS` și `TELEGRAM_ENABLE_MESSAGING=true`. Secretul webhook-ului este verificat în antetul `X-Telegram-Bot-Api-Secret-Token`; conversațiile de grup și orice ID numeric care nu este în allowlist sunt ignorate fără răspuns financiar. Nu se folosesc numele de utilizator pentru autorizare.
+
+`TELEGRAM_CONFIGURE_WEBHOOK_ON_START=true` cere aplicației să înregistreze automat callback-ul HTTPS din `APP_PUBLIC_URL` la pornire. `TELEGRAM_ALLOW_REPORTS=true` permite trimiterea unui PDF numai la comanda explicită `/raport AAAA-LL` sau „Trimite-mi raportul financiar lunar”. ID-urile update-urilor sunt deduplicate în SQLite; textul mesajelor, numele și ID-urile chatului nu se păstrează.
+
+Răspunsurile refolosesc agregatele SQLite și raportează clar când lipsesc date. Vânzările Creasoft fără perioadă sunt descrise drept vânzări raportate, nu numerar disponibil în tonomat. Booking neîncasat rămâne separat de banii disponibili. Telegram nu importă extrase bancare. Botul trebuie creat de proprietar prin @BotFather; tokenul și ID-ul numeric al proprietarului nu se publică și nu se comit. Codul nu pretinde că botul este conectat până când tokenul, ID-ul autorizat și webhook-ul nu sunt configurate și testate efectiv.
+
 Exemplu de backup criptat, rulat pe instanța care poate accesa baza:
 
     python scripts/backup_database.py --create --database /var/data/finante.sqlite3 --backup /var/data/backup-2026-10-16.afpb
@@ -95,3 +103,5 @@ python -m unittest discover -s tests -v
 Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. WhatsApp, Creasoft API și Booking API nu sunt conectate. Hostingul este doar pregătit, nu activat. Snapshot-urile Render sunt automate în cazul unui deploy cu disc persistent; nu este configurată o copie criptată off-site.
 
 Rapoartele și fișierele financiare locale sunt excluse din Git prin `.gitignore`. Nu folosi date demonstrative drept tranzacții reale.
+
+
