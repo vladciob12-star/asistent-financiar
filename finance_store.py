@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS whatsapp_webhook_receipts (
  message_id TEXT PRIMARY KEY, received_at INTEGER NOT NULL,
  claimed_until INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'processing'
 );
+CREATE TABLE IF NOT EXISTS telegram_webhook_receipts (
+ update_id INTEGER PRIMARY KEY, received_at INTEGER NOT NULL,
+ claimed_until INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'processing'
+);
 """
 
 
@@ -424,3 +428,5 @@ def write_html_report(db: sqlite3.Connection, month: str, path: Path) -> None:
 
 def _escape(value: str) -> str:
     return value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;").replace("'","&#x27;")
+
+
