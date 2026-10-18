@@ -113,7 +113,6 @@ class WebAppTests(unittest.TestCase):
             self.assertTrue(all(row[4] and len(row[4]) == 64 for row in rows))
             self.assertTrue(all(row[5] == "unclassified" and row[6] == "received" for row in rows))
             self.assertEqual(db.execute("SELECT count(*) FROM bank_balances").fetchone()[0], 0)
-
     def test_cloud_auth_requires_https_hash_and_gates_dashboard(self):
         with self.assertRaises(ValueError):
             FinanceHTTPServer(self.database, 0, host="0.0.0.0")
