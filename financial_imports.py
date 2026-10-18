@@ -7,6 +7,7 @@ file being imported. This keeps Booking.com and bank imports auditable.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -32,6 +33,58 @@ class FinancialRecord:
     kind: str = "unclassified"
     settlement: str = "recorded"
     counterparty: str = ""
+
+
+
+def import_mt940(path: Path) -> list[FinancialRecord]:
+    """Parse a manually downloaded MT940 statement; balances are not income."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Nu pot citi extrasul MT940 {path}.") from exc
+    currency_match = re.search(r"^:60[FM]:[CD]\d{6}(?:\d{4})?([A-Z]{3})", text, re.MULTILINE)
+    if not currency_match:
+        currency_match = re.search(r"^:62[FM]:[CD]\d{6}(?:\d{4})?([A-Z]{3})", text, re.MULTILINE)
+    if not currency_match:
+        raise ValueError("Extrasul MT940 nu declară moneda în soldul inițial/final.")
+    currency = currency_match.group(1)
+    transaction_re = re.compile(r"^:61:(\d{6})(?:\d{4})?(?:R[CD])?([CD])(\d+(?:,\d+)?)N([A-Z0-9]{3,4})?(.*)$")
+    records: list[FinancialRecord] = []
+    current: dict[str, str] | None = None
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if line.startswith(":61:"):
+            if current:
+                records.append(_mt940_record(path, currency, current))
+            match = transaction_re.match(line)
+            if not match:
+                raise ValueError(f"{path}, linia {line_number}: tranzacție MT940 nevalidă.")
+            yy, direction, raw_amount, code, suffix = match.groups()
+            yy_num = int(yy[:2])
+            year = 2000 + yy_num if yy_num < 70 else 1900 + yy_num
+            transaction_date = date(year, int(yy[2:4]), int(yy[4:6])).isoformat()
+            amount = Decimal(raw_amount.replace(",", "."))
+            if not amount.is_finite():
+                raise ValueError(f"{path}, linia {line_number}: sumă MT940 nevalidă.")
+            current = {"source_row": str(line_number), "date": transaction_date,
+                       "amount": format(amount if direction == "C" else -amount, "f"),
+                       "code": code or "", "suffix": suffix.strip(), "description": ""}
+        elif current and line.startswith(":86:"):
+            current["description"] = line[4:].strip()
+        elif current and line and not line.startswith(":"):
+            current["description"] = (current["description"] + " " + line.strip()).strip()
+    if current:
+        records.append(_mt940_record(path, currency, current))
+    if not records:
+        raise ValueError(f"{path}: extrasul MT940 nu conține tranzacții.")
+    return records
+
+
+def _mt940_record(path: Path, currency: str, item: dict[str, str]) -> FinancialRecord:
+    description = item["description"] or f"Tranzacție MT940 {item['code']}"
+    external_id = hashlib.sha256(item["suffix"].encode("utf-8")).hexdigest() if item["suffix"] else ""
+    return FinancialRecord("bank", item["date"], description[:1000], item["amount"],
+                           currency, path.name, int(item["source_row"]), external_id,
+                           settlement="received")
 
 
 def load_mapping(path: Path) -> dict[str, Any]:
