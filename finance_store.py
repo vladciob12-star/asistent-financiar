@@ -92,6 +92,16 @@ CREATE TABLE IF NOT EXISTS gmail_booking_messages (
 """
 
 
+def _content_digest(content: bytes | None, supplied: str | None) -> str:
+    if supplied is not None:
+        if len(supplied) != 64 or any(char not in "0123456789abcdef" for char in supplied):
+            raise ValueError("Amprenta documentului este invalidă.")
+        return supplied
+    if content is None:
+        raise ValueError("Conținutul sau amprenta documentului este obligatorie.")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _normalize_machine_label(label: str) -> str:
     decomposed = unicodedata.normalize("NFKD", label.casefold())
     ascii_text = "".join(char for char in decomposed if not unicodedata.combining(char))
@@ -114,10 +124,11 @@ def canonical_creasoft_machine(label: str) -> tuple[str, str]:
     return "unassigned", "needs_review"
 
 
-def import_creasoft_report(db: sqlite3.Connection, filename: str, content: bytes,
-                           aggregates: dict[str, dict[str, Decimal]]) -> tuple[int, int]:
+def import_creasoft_report(db: sqlite3.Connection, filename: str, content: bytes | None,
+                           aggregates: dict[str, dict[str, Decimal]], *,
+                           content_sha256: str | None = None) -> tuple[int, int]:
     """Store Creasoft aggregates without inventing a report period or cash balance."""
-    digest = hashlib.sha256(content).hexdigest()
+    digest = _content_digest(content, content_sha256)
     if not aggregates:
         raise ValueError("Raportul Creasoft nu conține agregate valide.")
     with db:
@@ -165,9 +176,10 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def import_observations(db: sqlite3.Connection, filename: str,
-                        content: bytes, rows: Iterable[Observation]) -> tuple[int, int]:
+                        content: bytes | None, rows: Iterable[Observation], *,
+                        content_sha256: str | None = None) -> tuple[int, int]:
     """Import a whole file atomically; identical bytes are never re-imported."""
-    digest = hashlib.sha256(content).hexdigest()
+    digest = _content_digest(content, content_sha256)
     materialized = list(rows)
     with db:
         found = db.execute("SELECT id FROM imports WHERE sha256=?", (digest,)).fetchone()
@@ -232,10 +244,10 @@ def import_observations(db: sqlite3.Connection, filename: str,
         return import_id, inserted
 
 
-def import_booking_records(db: sqlite3.Connection, filename: str, content: bytes,
-                          records: Iterable) -> tuple[int, int]:
+def import_booking_records(db: sqlite3.Connection, filename: str, content: bytes | None,
+                          records: Iterable, *, content_sha256: str | None = None) -> tuple[int, int]:
     """Store Booking amounts separately; payout lines are never bank receipts."""
-    digest=hashlib.sha256(content).hexdigest()
+    digest=_content_digest(content, content_sha256)
     materialized=list(records)
     with db:
         found=db.execute("SELECT id FROM imports WHERE sha256=?",(digest,)).fetchone()
@@ -454,6 +466,5 @@ def write_html_report(db: sqlite3.Connection, month: str, path: Path) -> None:
 
 def _escape(value: str) -> str:
     return value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;").replace("'","&#x27;")
-
 
 
