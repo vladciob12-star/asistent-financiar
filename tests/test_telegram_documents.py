@@ -7,7 +7,7 @@ from pathlib import Path
 
 from booking_imports import HEADERS
 from finance_store import connect
-from telegram_documents import analyze_document, draft_preview, finish_draft
+from telegram_documents import _check_rows, analyze_document, finish_draft
 
 
 def booking_csv():
@@ -60,6 +60,10 @@ class TelegramDocumentTests(unittest.TestCase):
     def test_unsupported_pdf_fails_without_staging(self):
         with self.assertRaisesRegex(ValueError, "nu poate fi citită în siguranță"):
             analyze_document(77, "statement.pdf", b"%PDF-fake", now=4000)
+
+    def test_document_row_limit_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "5000 de rânduri"):
+            _check_rows([None] * 5001)
 
     def test_creasoft_csv_preview_notes_cash_and_period_limits(self):
         content = "Vendomat;Cantitate;Incasari totale (cash + non-cash - rest)\nOradea Era;3;45,00\n".encode()
