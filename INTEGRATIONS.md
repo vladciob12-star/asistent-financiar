@@ -31,6 +31,23 @@ Codul pentru Meta WhatsApp Business Platform Cloud API este implementat, dar int
 
 Activarea necesită Meta Business Portfolio, aplicație Meta cu produs WhatsApp, WABA, număr business eligibil/înregistrat, webhook public HTTPS și abonarea aplicației la `messages`, token system-user cu `whatsapp_business_messaging`, App Secret, Verify Token și allowlist de numere. Proprietarul trebuie să verifice prețul curent Meta și regulile de consimțământ înainte de a trimite mesaje; nu a fost activată nicio conexiune și codul nu pretinde că funcționează cu Meta până la această configurare.
 
+## Telegram Bot API
+
+Telegram este implementat ca integrare separată; nu înlocuiește și nu modifică webhook-ul WhatsApp. Starea implicită este dezactivată. Nu se face polling `getUpdates`; mesajele intră numai prin POST la `/webhook/telegram`.
+
+Configurarea Railway folosește aceste variabile secrete:
+
+- `TELEGRAM_BOT_TOKEN`: tokenul creat de proprietar în conversația oficială cu @BotFather.
+- `TELEGRAM_WEBHOOK_SECRET`: valoare aleatorie proprie, 32–128 caractere `[A-Za-z0-9_-]`, trimisă de Telegram în antetul webhook-ului.
+- `TELEGRAM_ALLOWED_USER_IDS`: lista separată prin virgulă cu ID-ul numeric Telegram al proprietarului. Username-urile nu sunt folosite la autorizare.
+- `TELEGRAM_ENABLE_MESSAGING=true`: activează mesajele după ce celelalte valori sunt validate.
+- `TELEGRAM_ALLOW_REPORTS=true`: permite numai PDF-uri cerute explicit prin chat; implicit este dezactivat.
+- `TELEGRAM_CONFIGURE_WEBHOOK_ON_START=true`: cere aplicației să înregistreze callback-ul HTTPS bazat pe `APP_PUBLIC_URL` la fiecare pornire/redeploy. Fără HTTPS valid și secrete complete, callback-ul nu se înregistrează.
+
+Handlerul validează secretul webhook-ului cu comparație constant-time, acceptă doar chat privat în care `chat.id` este egal cu `from.id`, aplică allowlist-ul numeric și deduplică `update_id` în tabelul SQLite. Nu persistă textul, numele sau ID-ul de chat și nu loghează request-urile. Mesajele neautorizate primesc HTTP 200 fără răspuns financiar. Mesajele acceptate folosesc aceleași agregate și PDF-uri existente; nu importă fișiere și nu citește extrase bancare automat. Vânzările Creasoft fără perioadă sunt prezentate ca atare, niciodată ca sold fizic al aparatului. Plățile Booking neconfirmate sunt separate de fondurile disponibile.
+
+Botul și conversația cu @BotFather trebuie create de proprietar; aplicația nu poate accesa identitatea sau tokenul Telegram fără acea configurare. Setarea webhook-ului de pornire și trimiterea mesajelor necesită conexiune la Telegram Bot API și pot consuma traficul inclus al serviciului Railway, fără un abonament Telegram separat. Nu este considerată conectată până când Telegram confirmă setWebhook și un mesaj real de la ID-ul autorizat primește răspuns.
+
 ## Creasoft
 
 Pagina oficială Creasoft descrie un API gratuit pentru integrarea payroll/ERP, cu sincronizare de angajați, evenimente și sumarizări, plus import/export Excel. Menționează separat telemetrie pentru vending, dar nu publică un contract API de rapoarte financiare vending. API-ul HR nu se presupune automat compatibil cu rapoartele vending.
@@ -74,3 +91,5 @@ Payments API oferă payout/reconciliere pe rezervare doar proprietăților care 
 - Meta: [WhatsApp Business Platform pricing](https://whatsappbusiness.com/products/platform-pricing/), [Cloud API getting started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started).
 - Creasoft: [API și export/import](https://www.creasoft.ro/ro/control-access-made-in-romania).
 - Booking.com: [Connectivity API](https://developers.booking.com/connectivity/docs), [autentificare](https://developers.booking.com/connectivity/docs/authentication), [acces endpoint](https://developers.booking.com/connectivity/docs/managing-endpoint-access), [Payments API](https://developers.booking.com/connectivity/docs/payments-api/understanding-the-payments-api), [Reconciliation API](https://developers.booking.com/connectivity/docs/openapispecs/reconciliation-api/reconciliation-api-specification).
+
+
