@@ -23,7 +23,7 @@ def booking_csv() -> bytes:
         HEADERS["net_payable"]:"84,00",HEADERS["payout_value"]:"-",
         HEADERS["payout_currency"]:"RON",HEADERS["payout_date"]:"-"})
     payout={header:"-" for header in columns}
-    payout.update({HEADERS["record_type"]:"(Payout)",HEADERS["reference"]:"",
+    payout.update({HEADERS["record_type"]:"(Payout)",HEADERS["reference"]:"SENSITIVE-PAYOUT-REF",
         HEADERS["issued_on"]:"05.09.2026",HEADERS["reservation_status"]:"-",
         HEADERS["transaction_currency"]:"RON",HEADERS["payout_currency"]:"RON",
         HEADERS["payout_value"]:"84,00",HEADERS["payout_date"]:"05.09.2026"})
@@ -64,6 +64,17 @@ class BookingReportTests(unittest.TestCase):
         records=import_booking_csv(self.path)
         self.assertEqual(import_booking_records(self.db,self.path.name,self.content,records)[1],2)
         self.assertEqual(import_booking_records(self.db,self.path.name,self.content,records)[1],0)
+        self.assertEqual(self.db.execute("select count(*) from booking_entries").fetchone()[0],2)
+
+    def test_overlapping_report_does_not_duplicate_rows_with_stable_booking_reference(self):
+        records=import_booking_csv(self.path)
+        # Change only the file bytes, as happens when an email attachment is
+        # regenerated with another line ending. The stable Booking reference
+        # and all financial fields still identify the same records.
+        reformatted=self.content.replace(b"\r\n",b"\n")
+        self.assertNotEqual(self.content,reformatted)
+        self.assertEqual(import_booking_records(self.db,"first.csv",self.content,records)[1],2)
+        self.assertEqual(import_booking_records(self.db,"overlap.csv",reformatted,records)[1],0)
         self.assertEqual(self.db.execute("select count(*) from booking_entries").fetchone()[0],2)
 
     def test_bank_match_is_only_a_proposal_until_manually_confirmed(self):

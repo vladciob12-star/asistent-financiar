@@ -245,6 +245,29 @@ def import_booking_records(db: sqlite3.Connection, filename: str, content: bytes
         import_id=cur.lastrowid
         count=0
         for record in materialized:
+            # Monthly reports can overlap or be resent with different CSV
+            # bytes (BOM/line endings). Only collapse a row when Booking gave
+            # us a stable reference and every identity/financial field agrees.
+            # Rows without a reference are retained because equal date/amount
+            # alone cannot distinguish two legitimate payouts.
+            if record.reference_hash:
+                duplicate = db.execute("""SELECT 1 FROM booking_entries
+                    WHERE record_type=? COLLATE NOCASE AND reference_hash=?
+                    AND issued_on IS ? AND check_in IS ? AND check_out IS ?
+                    AND reservation_status=? COLLATE NOCASE
+                    AND gross IS ? AND commission IS ? AND service_fee IS ?
+                    AND vat IS ? AND tax IS ? AND transaction_value IS ?
+                    AND transaction_currency=? AND net_payable IS ?
+                    AND payout_value IS ? AND payout_currency=? AND payout_date IS ?
+                    LIMIT 1""",
+                    (record.record_type,record.reference_hash,record.issued_on,
+                     record.check_in,record.check_out,record.reservation_status,
+                     record.gross,record.commission,record.service_fee,record.vat,
+                     record.tax,record.transaction_value,record.transaction_currency,
+                     record.net_payable,record.payout_value,record.payout_currency,
+                     record.payout_date)).fetchone()
+                if duplicate:
+                    continue
             db.execute("""INSERT INTO booking_entries(import_id,source_row,record_type,reference_hash,
                 issued_on,check_in,check_out,reservation_status,gross,commission,service_fee,vat,tax,
                 transaction_value,transaction_currency,net_payable,payout_value,payout_currency,payout_date)
