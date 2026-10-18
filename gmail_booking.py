@@ -180,6 +180,7 @@ def sync_booking_mail(db_path: Path, config: GmailBookingConfig) -> dict[str, in
         )
         counts["messages_scanned"] += 1
         if _booking_sender(metadata):
+            invalid_csv = False
             message = _api_json(
                 f"{GMAIL_API}/messages/{encoded_id}?format=full&fields=payload(parts(filename,mimeType,body(attachmentId,size),parts(filename,mimeType,body(attachmentId,size),parts(filename,mimeType,body(attachmentId,size),parts(filename,mimeType,body(attachmentId,size))))))",
                 token,
@@ -190,6 +191,7 @@ def sync_booking_mail(db_path: Path, config: GmailBookingConfig) -> dict[str, in
                     continue
                 content = _attachment(part, message_id, token)
                 if not content:
+                    invalid_csv = True
                     continue
                 temp_name = None
                 try:
@@ -202,12 +204,15 @@ def sync_booking_mail(db_path: Path, config: GmailBookingConfig) -> dict[str, in
                     counts["attachments_imported"] += 1
                     counts["records_imported"] += inserted
                 except (ValueError, OSError):
-                    # Invalid/unrelated CSVs are not logged or stored. Continue
-                    # scanning other attachments in the same Booking message.
+                    # Keep this message eligible for a later retry. This avoids
+                    # silently marking an unknown report format as processed.
+                    invalid_csv = True
                     continue
                 finally:
                     if temp_name is not None:
                         temp_name.unlink(missing_ok=True)
+            if invalid_csv:
+                continue
         _mark_processed(db_path, message_id)
     return counts
 
