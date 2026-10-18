@@ -142,10 +142,10 @@ class MappedCsvTests(unittest.TestCase):
 
     def test_mt940_import_parses_synthetic_transactions_and_hashes_reference(self):
         path = self.folder / "synthetic.sta"
-        path.write_text(":20:SYNTHETIC\\n:25:ACCOUNT-REDACTED\\n:60F:C261001RON1000,00\\n"
-                        ":61:2610021002C100,50NTRFNONREF//SYNTH-REF-1\\n:86:INCASARE TEST\\n"
-                        ":61:261003D25,50NTRFNONREF//SYNTH-REF-2\\n:86:PLATA TEST\\n"
-                        ":62F:C261003RON1075,00\\n", encoding="ascii")
+        path.write_text(":20:SYNTHETIC\n:25:ACCOUNT-REDACTED\n:60F:C261001RON1000,00\n"
+                        ":61:2610021002C100,50NTRFNONREF//SYNTH-REF-1\n:86:INCASARE TEST\n"
+                        ":61:261003D25,50NTRFNONREF//SYNTH-REF-2\n:86:PLATA TEST\n"
+                        ":62F:C261003RON1075,00\n", encoding="ascii")
         rows = import_mt940(path)
         self.assertEqual([(row.transaction_date, row.amount, row.currency) for row in rows], [
             ("2026-10-02", "100.50", "RON"), ("2026-10-03", "-25.50", "RON")])
@@ -155,7 +155,7 @@ class MappedCsvTests(unittest.TestCase):
 
     def test_mt940_rejects_statement_without_currency(self):
         path = self.folder / "missing-currency.sta"
-        path.write_text(":20:SYNTHETIC\\n:61:261002C100,00NTRFNONREF\\n", encoding="ascii")
+        path.write_text(":20:SYNTHETIC\n:61:261002C100,00NTRFNONREF\n", encoding="ascii")
         with self.assertRaisesRegex(ValueError, "nu declară moneda"):
             import_mt940(path)
 
