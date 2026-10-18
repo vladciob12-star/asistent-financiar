@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 
-from finance_store import Observation, connect, import_observations
+from finance_store import Observation, connect, import_creasoft_report, import_observations
 from telegram_bot import TelegramBotAPI, TelegramConfig, answer_message, set_webhook, verify_webhook_secret
 from web_app import FinanceHTTPServer
 
@@ -118,6 +118,7 @@ class TelegramTests(unittest.TestCase):
         self.assertIn("125.50 RON", answer)
         self.assertIn("Venituri clasificate", answer)
         self.assertNotIn("Synthetic income", answer)
+        self.assertIn("Ultima actualizare a datelor:", answer)
         with closing(connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM telegram_webhook_receipts WHERE status='completed'").fetchone()[0], 1)
 
@@ -158,6 +159,21 @@ class TelegramTests(unittest.TestCase):
             answer, report = answer_message(db, "Câți bani am în primul tonomat?", int(time.time()), False)
         self.assertIn("Nu există date înregistrate", answer)
         self.assertIsNone(report)
+
+    def test_era_and_crisul_names_route_to_their_synthetic_creasoft_reports(self):
+        with closing(connect(self.database)) as db:
+            import_creasoft_report(db, "era.csv", b"synthetic-era", {
+                "Oradea Era": {"cantitate": 4, "incasari": 40.00},
+            })
+            era, _ = answer_message(db, "Cât a produs tonomatul de la ERA?", int(time.time()), False)
+            import_creasoft_report(db, "crius.csv", b"synthetic-crius", {
+                "Crișul Shopping Center — Oradea": {"cantitate": 3, "incasari": 27.00},
+            })
+            crius, _ = answer_message(db, "Cât a produs tonomatul de la Crișul?", int(time.time()), False)
+        self.assertIn("40.00 RON", era)
+        self.assertIn("nu reprezintă banii disponibili", era)
+        self.assertIn("al doilea tonomat", crius)
+        self.assertIn("27.00 RON", crius)
 
     def test_webhook_secret_validation_and_config_are_fail_closed(self):
         self.assertTrue(verify_webhook_secret(self.server.telegram_config, WEBHOOK_SECRET))
