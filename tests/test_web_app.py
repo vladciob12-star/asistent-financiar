@@ -96,6 +96,24 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(row["raw_json"], "{}")
             self.assertEqual(db.execute("SELECT filename FROM imports").fetchone()[0], "synthetic-statement.csv")
 
+    def test_manual_bt_go_mt940_import_needs_no_mapping_and_keeps_balance_separate(self):
+        content = (":20:SYNTHETIC\\n:25:ACCOUNT-REDACTED\\n:60F:C261001RON1000,00\\n"
+                   ":61:2610021002C100,50NTRFNONREF//SYNTH-REF-1\\n:86:INCASARE TEST\\n"
+                   ":61:261003D25,50NTRFNONREF//SYNTH-REF-2\\n:86:PLATA TEST\\n"
+                   ":62F:C261003RON1075,00\\n").encode("ascii")
+        page = self.post("/import/bank", {"csrf": self.csrf, "month": "2026-10", "mapping": ""},
+                         "synthetic.sta", content)
+        self.assertIn("Extras bancar: importate 2 tranzacții", page)
+        with closing(connect(self.database)) as db:
+            rows = db.execute("SELECT occurred_on,amount,currency,description,external_id,kind,settlement "
+                              "FROM observations ORDER BY id").fetchall()
+            self.assertEqual([tuple(row[:4]) for row in rows], [
+                ("2026-10-02", "100.50", "RON", "INCASARE TEST"),
+                ("2026-10-03", "-25.50", "RON", "PLATA TEST")])
+            self.assertTrue(all(row[4] and len(row[4]) == 64 for row in rows))
+            self.assertTrue(all(row[5] == "unclassified" and row[6] == "received" for row in rows))
+            self.assertEqual(db.execute("SELECT count(*) FROM bank_balances").fetchone()[0], 0)
+
     def test_cloud_auth_requires_https_hash_and_gates_dashboard(self):
         with self.assertRaises(ValueError):
             FinanceHTTPServer(self.database, 0, host="0.0.0.0")
