@@ -14,7 +14,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from finance_store import monthly_summary
-from whatsapp import financial_answer
 
 
 MAX_WEBHOOK_BYTES = 1_000_000
@@ -172,10 +171,67 @@ def _month_label(now: int) -> str:
     return date.fromtimestamp(now).strftime("%Y-%m")
 
 
+def _requested_month(text: str, now: int) -> str:
+    match = re.search(r"(?<!\d)(20\d{2}-(?:0[1-9]|1[0-2]))(?!\d)", text)
+    return match.group(1) if match else _month_label(now)
+
+
 def _money_rows(rows: list[dict]) -> str:
     if not rows:
-        return "nu există sume înregistrate"
-    return "; ".join(f"{row['amount']} {row['currency']}" for row in rows)
+        return "nu apar sume înregistrate"
+    return "; ".join(f"{_format_money(Decimal(row['amount']))} {_currency_name(row['currency'])}" for row in rows)
+
+
+def _currency_name(currency: str) -> str:
+    return {"RON": "lei", "EUR": "euro", "USD": "dolari"}.get(currency.upper(), currency.upper())
+
+
+def _format_money(amount: Decimal) -> str:
+    return f"{amount:,.2f}".replace(",", "\0").replace(".", ",").replace("\0", ".")
+
+
+def _totals_by_currency(report: dict, key: str) -> dict[str, Decimal]:
+    totals: dict[str, Decimal] = {}
+    for currencies in report["activities"].values():
+        for currency, values in currencies.items():
+            totals[currency] = totals.get(currency, Decimal(0)) + Decimal(values[key])
+    return totals
+
+
+def _totals_text(values: dict[str, Decimal]) -> str:
+    if not values:
+        return "nu apar date"
+    return "; ".join(f"{_format_money(value)} {_currency_name(currency)}"
+                      for currency, value in sorted(values.items()))
+
+
+def _financial_report_text(report: dict) -> str:
+    incomes = _totals_by_currency(report, "income")
+    expenses = _totals_by_currency(report, "expense")
+    commissions = _totals_by_currency(report, "commission")
+    costs = {currency: expenses.get(currency, Decimal(0)) + commissions.get(currency, Decimal(0))
+             for currency in expenses.keys() | commissions.keys()}
+    profits = {currency: incomes.get(currency, Decimal(0)) - costs.get(currency, Decimal(0))
+               for currency in incomes.keys() | costs.keys()}
+    balances = "; ".join(
+        f"{_format_money(Decimal(row['amount']))} {_currency_name(row['currency'])} (la {row['as_of']})"
+        for row in report["bank_available_balances"]
+    ) or "soldul nu a fost introdus manual"
+    receivables = _money_rows(report["booking_receivables_not_cash"])
+    booking_payouts = _money_rows(report["booking_reported_payouts_not_bank_confirmed"])
+    received = _money_rows(report["bank_received_totals"])
+    return (
+        f"Raport financiar — {report['period']}\n"
+        f"- Bani disponibili: {balances}\n"
+        f"- Încasat confirmat în bancă: {received}\n"
+        f"- Venituri înregistrate: {_totals_text(incomes)}\n"
+        f"- Cheltuieli: {_totals_text(costs)}\n"
+        f"- Profit estimat: {_totals_text(profits)}\n"
+        f"- De primit de la Booking: {receivables}\n"
+        f"- Booking indică plăți: {booking_payouts} (încă neconfirmate în bancă)\n\n"
+        "Observație: numerarul din aparate nu este cunoscut; sumele Booking sunt separate.\n"
+        "Concluzie: soldul disponibil vine din extras; profitul este estimativ."
+    )
 
 
 
@@ -203,67 +259,88 @@ def _machine_answer(db, text: str, now: int) -> str | None:
     if activity is None:
         return "Nu pot identifica tonomatul. Întreabă despre primul sau al doilea tonomat."
     label = MACHINE_LABELS[activity]
-    month = _month_label(now)
+    month = _requested_month(text, now)
     report = monthly_summary(db, month)
     values = report["activities"].get(activity, {})
     if values:
-        monthly = "; ".join(
-            f"venit {v['income']} {currency}, cheltuieli și comisioane "
-            f"{(Decimal(v['expense']) + Decimal(v['commission'])):.2f} {currency}, rezultat estimat "
-            f"{v['estimated_result']} {currency}"
+        monthly = "\n".join(
+            f"- Venituri: {_format_money(Decimal(v['income']))} {_currency_name(currency)}\n"
+            f"- Cheltuieli și comisioane: {_format_money(Decimal(v['expense']) + Decimal(v['commission']))} {_currency_name(currency)}\n"
+            f"- Profit estimat: {_format_money(Decimal(v['estimated_result']))} {_currency_name(currency)}"
             for currency, v in sorted(values.items())
         )
-        return (f"Pentru {label}, în {month}: {monthly}. Acestea sunt valori clasificate, nu sold de numerar "
-                "confirmat în aparat. Rapoartele Creasoft nu stabilesc soldul fizic disponibil.")
+        return (f"Raport financiar — {label}, {month}\n{monthly}\n\n"
+                "Observație: aceste valori nu arată numerarul rămas în aparat.")
     latest = db.execute("""SELECT machine_label,reported_sales,currency FROM creasoft_reports
         WHERE activity=? ORDER BY import_id DESC,id DESC LIMIT 1""", (activity,)).fetchone()
     if latest:
         sales = Decimal(latest["reported_sales"])
-        return (f"Cel mai recent raport Creasoft disponibil pentru {label} arată vânzări raportate de "
-                f"{sales:.2f} {latest['currency']}, dar perioada nu este precizată. "
-                "Raportul combină numerarul și plățile non-cash; nu reprezintă banii disponibili în aparat.")
-    return f"Nu există date înregistrate pentru {label}. Importă manual raportul Creasoft ca să apară informații."
+        total = _format_money(sales)
+        currency = _currency_name(latest["currency"])
+        return (f"Raport Creasoft — {label}\n- Vânzări totale: {total} {currency}\n\n"
+                "Observații:\n- Perioada raportului nu este precizată.\n"
+                "- Numerarul și cardul sunt combinate; soldul aparatului nu poate fi stabilit.\n\n"
+                f"Concluzie: vânzări raportate de {total} {currency}.")
+    return (f"Raport Creasoft — {label}\nNu există date înregistrate.\n\n"
+            "Concluzie: importă un raport Creasoft pentru a vedea vânzările.")
 
 
 def answer_message(db, text: str, now: int, allow_reports: bool) -> tuple[str, str | None]:
     normalized = " ".join(text.casefold().split())
     greeting = normalized.strip("!?,. ")
     if greeting in {"salut", "bună", "buna", "bună ziua", "buna ziua", "hello", "hi", "/start"}:
-        return ("Salut! Sunt asistentul tău financiar. Poți întreba despre venituri, cheltuieli, profit estimat, "
-                "bani disponibili, Booking sau unul dintre tonomate. Pentru comenzile complete scrie /ajutor.", None)
+        return ("Salut! 👋\nÎntreabă-mă despre bani, încasări, cheltuieli, profit, Booking sau tonomate.\n"
+                "Raportul lunar: /situatie", None)
     if normalized.startswith("/ajutor") or normalized in {"ajutor", "help", "/help"}:
-        return ("Poți întreba: «Câți bani am disponibili?», «Cât am încasat luna aceasta?», «Ce profit am?», "
-                "«Câți bani am în primul tonomat?» sau «Ce sume am de primit de la Booking?». "
-                "Pentru PDF scrie «Trimite-mi raportul financiar lunar» ori /raport AAAA-LL. "
-                "Sunt folosite doar datele existente, fără conversii valutare. Extrasele bancare se importă manual.", None)
+        return ("Poți întreba:\n- Câți bani am?\n- Cât am încasat?\n- Cât am cheltuit?\n"
+                "- Ce profit am?\n- Cât mai am de primit de la Booking?\n\n"
+                "Raport lunar: /situatie\nRaport PDF: /raport AAAA-LL", None)
     if (normalized.startswith("/raport ") or normalized in {"/raport", "raport pdf"}
             or "raportul financiar lunar" in normalized or "raport financiar lunar" in normalized):
         month_match = re.search(r"(?<!\d)(20\d{2}-(?:0[1-9]|1[0-2]))(?!\d)", normalized)
         month = month_match.group(1) if month_match else _month_label(now)
-        return f"Pregătesc raportul financiar agregat pentru {month}.", month
+        return f"Raport financiar\nPregătesc raportul pentru {month}.", month
     if ("tonomat" not in normalized and "automat" not in normalized
             and any(term in normalized for term in ("bani am", "bani disponibili", "fonduri disponibile", "câți bani", "cati bani"))):
         report = monthly_summary(db, _month_label(now))
-        balances = report["bank_available_balances"]
-        bank = "; ".join(f"{row['amount']} {row['currency']} (sold introdus manual la {row['as_of']})"
-                          for row in balances) or "sold bancar necunoscut; nu există un sold introdus manual"
-        booking = _money_rows(report["booking_receivables_not_cash"])
-        return (f"Bani disponibili confirmați: {bank}. Numerarul din tonomatele ERA și Crișul nu poate fi stabilit "
-                "din datele existente: rapoartele Creasoft disponibile combină cash și non-cash și nu confirmă numerarul fizic. "
-                f"Sume Booking raportate/de primit: {booking}; sunt separate și nu sunt incluse în banii disponibili. "
-                "Valorile nu se adună între monede diferite.", None)
+        return _financial_report_text(report), None
     if "booking" in normalized or "de primit" in normalized or "neîncasat" in normalized or "neincasat" in normalized:
-        month = _month_label(now)
+        month = _requested_month(text, now)
         report = monthly_summary(db, month)
         receivables = _money_rows(report["booking_receivables_not_cash"])
         payout = _money_rows(report["booking_reported_payouts_not_bank_confirmed"])
-        return (f"Booking pentru {month}: sume de primit neîncasate: {receivables}. "
-                f"Plăți raportate, încă neconfirmate în extrasul bancar: {payout}. "
-                "Nu le adun la banii disponibili până la confirmarea manuală în extras.", None)
+        return (f"Raport Booking — {month}\n- De primit: {receivables}\n"
+                f"- Booking indică plăți: {payout}\n\n"
+                "Atenție: plățile nu sunt confirmate în bancă până nu apar în extras.", None)
     machine = _machine_answer(db, text, now)
     if machine is not None:
         return machine, None
-    return financial_answer(db, text, now)
+    query = _normalize_question(text)
+    month = _requested_month(text, now)
+    if query == "situatie" or query.startswith("situatie ") or "raport financiar" in query:
+        return _financial_report_text(monthly_summary(db, month)), None
+    if any(term in query for term in ("cheltu", "cost", "comision", "profit", "castig", "incas", "venit")):
+        report = monthly_summary(db, month)
+        incomes = _totals_by_currency(report, "income")
+        expenses = _totals_by_currency(report, "expense")
+        commissions = _totals_by_currency(report, "commission")
+        costs = {currency: expenses.get(currency, Decimal(0)) + commissions.get(currency, Decimal(0))
+                 for currency in expenses.keys() | commissions.keys()}
+        profits = {currency: incomes.get(currency, Decimal(0)) - costs.get(currency, Decimal(0))
+                   for currency in incomes.keys() | costs.keys()}
+        if any(term in query for term in ("cheltu", "cost", "comision")):
+            amount = _totals_text(costs)
+            return (f"Raport financiar — {month}\n- Cheltuieli: {amount}\n\nConcluzie: cheltuieli înregistrate {amount}.", None)
+        if any(term in query for term in ("profit", "castig")):
+            amount = _totals_text(profits)
+            return (f"Raport financiar — {month}\n- Profit estimat: {amount}\n\nConcluzie: profit estimat {amount}.", None)
+        income_text = _totals_text(incomes)
+        received = _money_rows(report["bank_received_totals"])
+        return (f"Raport financiar — {month}\n- Venituri înregistrate: {income_text}\n"
+                f"- Încasat confirmat în bancă: {received}\n\n"
+                "Concluzie: doar suma din extras este confirmată în bancă."), None
+    return ("Nu am găsit date pentru această întrebare.\n"
+            "Încearcă: «Câți bani am?», «Cât am încasat?» sau «Ce profit am?».", None)
 
 
 def claim_update(db, update_id: int, now: int) -> bool:
