@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 import urllib.error
 import urllib.request
 import uuid
@@ -22,9 +23,15 @@ SECRET_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 MACHINE_ACTIVITY = {
     "primul": "vending_oradea_era",
     "1": "vending_oradea_era",
+    "era": "vending_oradea_era",
+    "oradea era": "vending_oradea_era",
     "al doilea": "vending_crius_shopping_center",
     "doilea": "vending_crius_shopping_center",
     "2": "vending_crius_shopping_center",
+    "crius": "vending_crius_shopping_center",
+    "crisul": "vending_crius_shopping_center",
+    "crisu": "vending_crius_shopping_center",
+    "crisu shopping center": "vending_crius_shopping_center",
 }
 MACHINE_LABELS = {
     "vending_oradea_era": "primul tonomat",
@@ -124,11 +131,28 @@ def _money_rows(rows: list[dict]) -> str:
     return "; ".join(f"{row['amount']} {row['currency']}" for row in rows)
 
 
+
+def _normalize_question(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    return " ".join("".join(char if char.isalnum() else " " for char in decomposed
+                            if not unicodedata.combining(char)).split())
+
+
+def latest_financial_update(db) -> str | None:
+    """Latest import/balance timestamp; SQLite CURRENT_TIMESTAMP is UTC."""
+    row = db.execute("""SELECT max(updated_at) AS updated_at FROM (
+        SELECT max(imported_at) AS updated_at FROM imports
+        UNION ALL SELECT max(created_at) AS updated_at FROM bank_balances
+    )""").fetchone()
+    return row["updated_at"] if row and row["updated_at"] else None
+
+
 def _machine_answer(db, text: str, now: int) -> str | None:
-    normalized = " ".join(text.casefold().split())
+    normalized = _normalize_question(text)
     if "tonomat" not in normalized and "automat" not in normalized:
         return None
-    activity = next((key for name, key in MACHINE_ACTIVITY.items() if name in normalized), None)
+    activity = next((activity for alias, activity in MACHINE_ACTIVITY.items()
+                     if re.search(rf"(?<![a-z0-9]){re.escape(_normalize_question(alias))}(?![a-z0-9])", normalized)), None)
     if activity is None:
         return "Nu pot identifica tonomatul. Întreabă despre primul sau al doilea tonomat."
     label = MACHINE_LABELS[activity]
@@ -147,8 +171,9 @@ def _machine_answer(db, text: str, now: int) -> str | None:
     latest = db.execute("""SELECT machine_label,reported_sales,currency FROM creasoft_reports
         WHERE activity=? ORDER BY import_id DESC,id DESC LIMIT 1""", (activity,)).fetchone()
     if latest:
+        sales = Decimal(latest["reported_sales"])
         return (f"Cel mai recent raport Creasoft disponibil pentru {label} arată vânzări raportate de "
-                f"{latest['reported_sales']} {latest['currency']}, dar perioada nu este precizată. "
+                f"{sales:.2f} {latest['currency']}, dar perioada nu este precizată. "
                 "Raportul combină numerarul și plățile non-cash; nu reprezintă banii disponibili în aparat.")
     return f"Nu există date înregistrate pentru {label}. Importă manual raportul Creasoft ca să apară informații."
 
@@ -239,7 +264,10 @@ def process_update(db, update: object, config: TelegramConfig, now: int, api: Te
                     report_writer(db, report_month, path)
                     api.send_pdf(chat_id, path, f"Raport financiar agregat {report_month}, solicitat de tine.")
         else:
-            api.send_text(chat_id, answer)
+            updated_at = latest_financial_update(db)
+            freshness = (f"Ultima actualizare a datelor: {updated_at} UTC."
+                         if updated_at else "Nu există încă importuri financiare în aplicație.")
+            api.send_text(chat_id, f"{answer}\\n\\n{freshness}")
         complete_update(db, update_id)
         return "processed"
     except Exception:
