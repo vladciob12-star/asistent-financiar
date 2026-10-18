@@ -105,6 +105,14 @@ class TelegramDocumentWebhookTests(unittest.TestCase):
         with closing(connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM imports").fetchone()[0], 0)
 
+    def test_photo_receives_safe_unsupported_message_without_download(self):
+        photo_update = {"update_id": 5, "message": {"from": {"id": OWNER},
+            "chat": {"id": OWNER, "type": "private"}, "photo": [{"file_id": "synthetic-photo"}]}}
+        with patch("web_app.TelegramBotAPI", FakeBotAPI):
+            self.post(photo_update)
+        self.assertIn("Nu pot citi fotografii sau bonuri", FakeBotAPI.texts[-1][1])
+        self.assertEqual(FakeBotAPI.downloaded, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
