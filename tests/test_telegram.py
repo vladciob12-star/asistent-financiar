@@ -160,6 +160,14 @@ class TelegramTests(unittest.TestCase):
         self.assertIn("Nu există date înregistrate", answer)
         self.assertIsNone(report)
 
+    def test_available_money_keeps_vending_cash_unknown_and_booking_separate(self):
+        with closing(connect(self.database)) as db:
+            answer, report = answer_message(db, "Câți bani am acum?", int(time.time()), False)
+        self.assertIsNone(report)
+        self.assertIn("sold bancar necunoscut", answer)
+        self.assertIn("Numerarul din tonomatele ERA și Crișul nu poate fi stabilit", answer)
+        self.assertIn("nu sunt incluse în banii disponibili", answer)
+
     def test_era_and_crisul_names_route_to_their_synthetic_creasoft_reports(self):
         with closing(connect(self.database)) as db:
             import_creasoft_report(db, "era.csv", b"synthetic-era", {
