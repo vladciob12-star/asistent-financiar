@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from contextlib import closing
 from dataclasses import asdict
 from decimal import Decimal
@@ -25,6 +26,8 @@ from financial_imports import FinancialRecord, import_csv, import_mt940, import_
 from main import citeste_raport
 
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+MAX_DOCUMENT_ROWS = 5000
+MAX_XLSX_UNPACKED_BYTES = 50 * 1024 * 1024
 DRAFT_TTL_SECONDS = 30 * 60
 _DRAFTS: dict[str, dict] = {}
 _DRAFT_LOCK = threading.Lock()
@@ -51,6 +54,24 @@ def _store_draft(user_id: int, kind: str, digest: str, rows: list[dict],
     return token
 
 
+def _check_rows(rows: list) -> None:
+    if len(rows) > MAX_DOCUMENT_ROWS:
+        raise ValueError(f"Documentul depășește limita de {MAX_DOCUMENT_ROWS} de rânduri. Nu am importat date.")
+
+
+def _check_xlsx_archive(path: Path) -> None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            unpacked = sum(entry.file_size for entry in entries)
+            if (len(entries) > 200 or unpacked > MAX_XLSX_UNPACKED_BYTES
+                    or any(entry.file_size > 0 and entry.compress_size == 0 for entry in entries)
+                    or any(entry.compress_size and entry.file_size / entry.compress_size > 100 for entry in entries)):
+                raise ValueError("Fișierul Excel este prea complex sau comprimat cu un raport nesigur.")
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError("Fișierul Excel nu este un document XLSX valid.") from exc
+
+
 def analyze_document(user_id: int, filename: str, content: bytes, now: int | None = None) -> tuple[str, str, str]:
     """Parse a supported attachment and stage normalized rows without importing."""
     now = int(time.time()) if now is None else now
@@ -70,6 +91,7 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
             try:
                 records = import_booking_csv(path)
                 rows = [asdict(record) for record in records]
+                _check_rows(rows)
                 total_commission = sum((Decimal(row["commission"] or "0") for row in rows), Decimal(0))
                 payout_rows = [row for row in rows if row["record_type"].casefold().strip("() ") == "payout"]
                 payout_total = sum((Decimal(row["payout_value"] or "0") for row in payout_rows), Decimal(0))
@@ -87,6 +109,7 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
                 aggregates = citeste_raport(path)
                 rows = [{"label": label, "quantity": str(values["cantitate"]),
                          "sales": str(values["incasari"])} for label, values in aggregates.items()]
+                _check_rows(rows)
                 total = sum((Decimal(row["sales"]) for row in rows), Decimal(0))
                 summary = (f"Raport Creasoft CSV: {len(rows)} aparate/etichete, vânzări raportate {total:.2f} RON. "
                            "Numerarul și plățile non-cash sunt combinate; perioada și soldul fizic nu sunt deduse.")
@@ -109,6 +132,7 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
                 raise ValueError("CSV-ul nu corespunde formatului Booking, Creasoft sau mapării bancare cunoscute. Nicio tranzacție nu a fost salvată; folosește maparea manuală din aplicație.") from exc
         elif ext == ".xlsx":
             try:
+                _check_xlsx_archive(path)
                 records = import_xlsx(path, _BANK_MAPPING)
             except (ValueError, ImportError) as exc:
                 raise ValueError("Excel-ul nu corespunde mapării bancare sigure DATA / DESCRIERE / SUMA (RON). Nicio tranzacție nu a fost salvată.") from exc
@@ -119,6 +143,7 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
                 raise ValueError("Fișierul MT940 nu a putut fi validat. Nicio tranzacție nu a fost salvată.") from exc
 
     rows = [asdict(record) for record in records]
+    _check_rows(rows)
     for row in rows:
         row["source_file"] = "telegram-document"
     credits = sum((Decimal(row["amount"]) for row in rows if Decimal(row["amount"]) > 0), Decimal(0))
