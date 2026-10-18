@@ -241,6 +241,17 @@ def answer_message(db, text: str, now: int, allow_reports: bool) -> tuple[str, s
         month_match = re.search(r"(?<!\d)(20\d{2}-(?:0[1-9]|1[0-2]))(?!\d)", normalized)
         month = month_match.group(1) if month_match else _month_label(now)
         return f"Pregătesc raportul financiar agregat pentru {month}.", month
+    if ("tonomat" not in normalized and "automat" not in normalized
+            and any(term in normalized for term in ("bani am", "bani disponibili", "fonduri disponibile", "câți bani", "cati bani"))):
+        report = monthly_summary(db, _month_label(now))
+        balances = report["bank_available_balances"]
+        bank = "; ".join(f"{row['amount']} {row['currency']} (sold introdus manual la {row['as_of']})"
+                          for row in balances) or "sold bancar necunoscut; nu există un sold introdus manual"
+        booking = _money_rows(report["booking_receivables_not_cash"])
+        return (f"Bani disponibili confirmați: {bank}. Numerarul din tonomatele ERA și Crișul nu poate fi stabilit "
+                "din datele existente: rapoartele Creasoft disponibile combină cash și non-cash și nu confirmă numerarul fizic. "
+                f"Sume Booking raportate/de primit: {booking}; sunt separate și nu sunt incluse în banii disponibili. "
+                "Valorile nu se adună între monede diferite.", None)
     if "booking" in normalized or "de primit" in normalized or "neîncasat" in normalized or "neincasat" in normalized:
         month = _month_label(now)
         report = monthly_summary(db, month)
