@@ -60,8 +60,10 @@ class GmailBookingTests(unittest.TestCase):
             if "format=full" in url:
                 return {"payload": {"parts": [{
                     "filename": "fake-monthly-report.csv", "mimeType": "text/csv",
-                    "body": {"data": encoded, "size": len(content)},
+                    "body": {"attachmentId": "fake-attachment-id", "size": len(content)},
                 }]}}
+            if "/attachments/" in url:
+                return {"data": encoded}
             raise AssertionError("Unexpected API endpoint")
 
         with tempfile.TemporaryDirectory() as directory:
