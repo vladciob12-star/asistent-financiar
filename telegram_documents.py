@@ -92,11 +92,21 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
                 records = import_booking_csv(path)
                 rows = [asdict(record) for record in records]
                 _check_rows(rows)
-                total_commission = sum((Decimal(row["commission"] or "0") for row in rows), Decimal(0))
                 payout_rows = [row for row in rows if row["record_type"].casefold().strip("() ") == "payout"]
-                payout_total = sum((Decimal(row["payout_value"] or "0") for row in payout_rows), Decimal(0))
-                summary = (f"Raport Booking CSV: {len(rows)} rânduri; comisioane raportate {total_commission:.2f}; "
-                           f"plăți raportate {payout_total:.2f}. Plățile nu sunt confirmate ca încasate în bancă.")
+                commission_totals: dict[str, Decimal] = {}
+                for row in rows:
+                    if row["commission"] is not None:
+                        currency = row["transaction_currency"] or "monedă lipsă"
+                        commission_totals[currency] = commission_totals.get(currency, Decimal(0)) + Decimal(row["commission"])
+                payout_totals: dict[str, Decimal] = {}
+                for row in payout_rows:
+                    if row["payout_value"] is not None:
+                        currency = row["payout_currency"] or "monedă lipsă"
+                        payout_totals[currency] = payout_totals.get(currency, Decimal(0)) + Decimal(row["payout_value"])
+                commission_text = "; ".join(f"{amount:.2f} {currency}" for currency, amount in sorted(commission_totals.items())) or "—"
+                payout_text = "; ".join(f"{amount:.2f} {currency}" for currency, amount in sorted(payout_totals.items())) or "—"
+                summary = (f"Raport Booking CSV: {len(rows)} rânduri; comisioane raportate {commission_text}; "
+                           f"plăți raportate {payout_text}. Plățile nu sunt confirmate ca încasate în bancă.")
                 details = "\n".join(
                     f"Rând {r['source_row']}: {r['record_type']}; brut {r['gross'] or '—'} {r['transaction_currency']}; "
                     f"comision {r['commission'] or '—'}; net de plată {r['net_payable'] or '—'}; "
