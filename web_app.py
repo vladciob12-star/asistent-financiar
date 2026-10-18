@@ -35,6 +35,7 @@ from finance_store import (
     record_bank_balance,
     write_monthly_pdf_report,
 )
+from gmail_booking import start_booking_mail_poller
 from financial_imports import import_csv, import_mt940, import_xlsx, load_mapping
 from main import citeste_raport
 from whatsapp import (MAX_WEBHOOK_BYTES, MetaAPIError, MetaCloudAPI, WhatsAppConfig,
@@ -712,6 +713,7 @@ class FinanceHTTPServer(ThreadingHTTPServer):
 
         self.whatsapp_config = WhatsAppConfig.from_env()
         self.telegram_config = TelegramConfig.from_env()
+        self.gmail_booking_thread, self.gmail_booking_stop = start_booking_mail_poller(db_path)
         self.telegram_webhook_setup_ok = False
         if (self.telegram_config.webhook_ready
                 and os.environ.get("TELEGRAM_CONFIGURE_WEBHOOK_ON_START", "").casefold() == "true"):
@@ -721,6 +723,11 @@ class FinanceHTTPServer(ThreadingHTTPServer):
                 print("Telegram webhook configured.")
             except (TelegramAPIError, ValueError):
                 print("Telegram webhook setup failed; check its configuration in Railway.")
+
+    def server_close(self):
+        if self.gmail_booking_stop is not None:
+            self.gmail_booking_stop.set()
+        super().server_close()
 
 
 def main() -> int:
@@ -761,5 +768,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 

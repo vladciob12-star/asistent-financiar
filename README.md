@@ -8,6 +8,7 @@ Nucleu local de import și registru financiar în dezvoltare. Datele rămân loc
 - Agregatele Creasoft pot fi scrise în SQLite cu `--import-creasoft-report`; aceleași bytes nu se importă din nou, etichetele necunoscute cer verificare, iar încasările cash + non-cash nu sunt prezentate ca numerar fizic.
 - Import manual MT940 pentru extrase BT Go, fără mapare; pentru CSV/XLSX rămâne disponibilă maparea explicită. Tranzacțiile nu sunt clasificate automat.
 - Import CSV financiar Booking.com cu antete localizate, câmpuri brute/comision/taxe/net/plată separate, deduplicare de fișier și referințe rezervare pseudonimizate.
+- Import automat opțional al rapoartelor Booking CSV din Gmail read-only; dezactivat până la autorizarea și configurarea OAuth Google.
 - Registru SQLite local pentru observații, importuri, propuneri de reconciliere și raport HTML lunar; veniturile, cheltuielile și rezultatul estimat sunt separate pe monedă, fără conversii valutare implicite.
 - O plată Booking raportată rămâne neconfirmată în bancă până la potrivire și confirmare manuală. Ea nu este adunată la fondurile bancare.
 - Reimportul aceluiași fișier este idempotent. Înregistrările similare necerte sunt păstrate și semnalate.

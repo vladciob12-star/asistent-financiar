@@ -6,6 +6,7 @@ Evaluare din 16 octombrie 2026. Documentația cloud completă și comparația co
 
 - Creasoft: import manual CSV cu agregate pe automat; perioada lipsă nu este dedusă, iar cash + non-cash nu sunt tratate ca numerar.
 - Booking.com: import manual CSV localizat; payout-urile sunt observații de creanță până la potrivirea și confirmarea manuală.
+- Gmail → Booking: importer automat opțional, dezactivat implicit; necesită autorizare OAuth read-only configurată separat.
 - Banca: import exclusiv manual BT Go MT940 (moneda este citită din fișier) sau CSV/XLSX cu mapare explicită. Nu se cer date de autentificare bancară și nu există conexiune PSD2/Open Banking.
 - SQLite: registru local persistent în calea configurată. Pentru cloud calea trebuie montată pe volumul persistent.
 - Cloud: imagine Docker, profil Render, autentificare cloud, health check și utilitar de backup criptat sunt pregătite, dar nu au fost deployate sau activate.
@@ -60,6 +61,14 @@ Connectivity API este destinat partenerilor Connectivity și proprietăților co
 
 Payments API oferă payout/reconciliere pe rezervare doar proprietăților care folosesc Payments by Booking.com și au implementat Reservations API. Reconciliation API poate genera rapoarte payout. Aceste valori pot fi importate automat după autorizare, dar nu dovedesc că banii au intrat în cont: reconcilierea cu banca rămâne dependentă de extrasul importat manual.
 
+### Importul rapoartelor din Gmail
+
+Codul `gmail_booking.py` poate verifica inboxul la 15 minute, dar este **dezactivat implicit** și nu este conectat la niciun cont. Când este configurat, face doar cereri Gmail API read-only pentru căutarea rapoartelor: caută în ultimele 90 de zile, examinează cel mult 1.000 de mesaje per ciclu, verifică domeniul expeditorului (`booking.com` sau subdomeniu) și încearcă numai atașamente `.csv`. CSV-ul trebuie să treacă validatorul Booking folosit și la importul manual.
+
+Importul salvează doar câmpurile financiare normalizate, hash-ul atașamentului și hash-ul referințelor Booking. Nu păstrează corpul e-mailului, subiectul, numele atașamentului sau bytes CSV. Mesajele sunt marcate local ca procesate pentru a evita reimportul; plățile Booking rămân creanțe neconfirmate până la reconcilierea manuală cu extrasul.
+
+Activarea cere configurarea secretelor `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` și `GMAIL_REFRESH_TOKEN`, apoi setarea explicită `GMAIL_BOOKING_AUTO_IMPORT=true`. Clientul OAuth trebuie să ceară numai `https://www.googleapis.com/auth/gmail.readonly`; codul nu trimite, șterge, arhivează sau etichetează mesaje. Înainte de activare sunt necesare un proiect OAuth Google și autorizarea proprietarului. Gmail clasifică `gmail.readonly` drept scope restricționat; pentru acces server-side pot fi necesare verificarea aplicației și evaluarea de securitate Google. Integrarea nu este considerată funcțională până când autorizarea OAuth și importul unui raport de test fără date reale sunt confirmate.
+
 ## Separarea automatizării și aprobărilor
 
 ### Se poate automatiza fără acces la servicii terțe
@@ -70,7 +79,8 @@ Payments API oferă payout/reconciliere pe rezervare doar proprietăților care 
 
 ### Poate deveni automat după aprobare și configurare
 
-- Polling read-only pentru rapoarte Creasoft/Booking, după accesul oficial și testarea unei scheme anonimizate.
+- Polling read-only Gmail pentru atașamente Booking CSV, după configurarea și verificarea OAuth Google.
+- Polling read-only pentru rapoarte Creasoft după accesul oficial și testarea unei scheme anonimizate.
 - Webhook-uri WhatsApp după configurarea contului Meta, HTTPS, verificarea semnăturii și lista expeditorilor.
 - Programarea și transferul backup-urilor după alegerea destinației, retenției și custodei cheii.
 
@@ -79,6 +89,7 @@ Payments API oferă payout/reconciliere pe rezervare doar proprietăților care 
 - Crearea unui serviciu cloud plătit, alegerea bugetului, domeniului și regiunii.
 - Introducerea secretelelor cloud și configurarea backup-urilor externe.
 - Autorizarea conturilor Creasoft, Booking sau Meta și alegerea datelor care pot fi preluate.
+- Crearea/configurarea proiectului OAuth Google, verificarea scope-ului restricționat și introducerea secretelor OAuth în Railway.
 - Orice mesaj WhatsApp outbound și orice cost Meta/BSP/cloud.
 - Clasificarea contabilă și confirmarea potrivirii dintre payout Booking și extras bancar.
 - Importul fiecărui extras bancar: rămâne exclusiv manual; nu se automatizează.
@@ -90,6 +101,7 @@ Payments API oferă payout/reconciliere pe rezervare doar proprietăților care 
 - Hetzner: [prețuri cloud după ajustarea din 15 iunie 2026](https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/).
 - Meta: [WhatsApp Business Platform pricing](https://whatsappbusiness.com/products/platform-pricing/), [Cloud API getting started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started).
 - Creasoft: [API și export/import](https://www.creasoft.ro/ro/control-access-made-in-romania).
+- Google: [Gmail API OAuth scopes](https://developers.google.com/workspace/gmail/api/auth/scopes), [Gmail API push notifications](https://developers.google.com/workspace/gmail/api/guides/push), [OAuth 2.0 refresh token policies](https://developers.google.com/identity/protocols/oauth2/).
 - Booking.com: [Connectivity API](https://developers.booking.com/connectivity/docs), [autentificare](https://developers.booking.com/connectivity/docs/authentication), [acces endpoint](https://developers.booking.com/connectivity/docs/managing-endpoint-access), [Payments API](https://developers.booking.com/connectivity/docs/payments-api/understanding-the-payments-api), [Reconciliation API](https://developers.booking.com/connectivity/docs/openapispecs/reconciliation-api/reconciliation-api-specification).
 
 
