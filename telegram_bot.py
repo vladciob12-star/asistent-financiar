@@ -100,6 +100,53 @@ class TelegramBotAPI:
             raise TelegramAPIError("Telegram nu a confirmat operația.")
         return result
 
+    def _get(self, url: str, limit: int) -> bytes:
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                raw = response.read(limit + 1)
+                if len(raw) > limit:
+                    raise TelegramAPIError("Fișierul Telegram depășește limita de siguranță.")
+                return raw
+        except TelegramAPIError:
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # Telegram includes the bot token in Bot API and file URLs.
+            raise TelegramAPIError("Descărcarea documentului Telegram a eșuat.") from None
+
+    def download_document(self, file_id: str) -> tuple[str, bytes]:
+        if not isinstance(file_id, str) or not file_id or len(file_id) > 256:
+            raise TelegramAPIError("Identificatorul documentului Telegram este invalid.")
+        result = self._post("getFile", json.dumps({"file_id": file_id}).encode(), "application/json")
+        file_info = result.get("result")
+        if not isinstance(file_info, dict):
+            raise TelegramAPIError("Telegram nu a returnat informațiile fișierului.")
+        path = file_info.get("file_path")
+        size = file_info.get("file_size", 0)
+        if (not isinstance(path, str) or path.startswith("/") or ".." in Path(path).parts
+                or not isinstance(size, int) or size <= 0 or size > 10 * 1024 * 1024):
+            raise TelegramAPIError("Fișierul este gol sau depășește limita de 10 MB.")
+        from urllib.parse import quote
+        url = f"https://api.telegram.org/file/bot{self.config.bot_token}/{quote(path, safe='/')}"
+        content = self._get(url, 10 * 1024 * 1024)
+        if len(content) != size:
+            raise TelegramAPIError("Descărcarea documentului Telegram este incompletă.")
+        return Path(path).name, content
+
+    def send_document_preview(self, chat_id: int, text: str, token: str) -> None:
+        keyboard = {"inline_keyboard": [[
+            {"text": "✅ Confirmă importul", "callback_data": f"imp:{token}:y"},
+            {"text": "❌ Anulează", "callback_data": f"imp:{token}:n"},
+        ], [{"text": "🔍 Vezi detalii", "callback_data": f"imp:{token}:d"}]]}
+        body = json.dumps({"chat_id": chat_id, "text": text[:4096], "reply_markup": keyboard},
+                          ensure_ascii=False).encode("utf-8")
+        self._post("sendMessage", body, "application/json; charset=utf-8")
+
+    def answer_callback(self, callback_id: str) -> None:
+        if isinstance(callback_id, str) and callback_id and len(callback_id) <= 256:
+            self._post("answerCallbackQuery", json.dumps({"callback_query_id": callback_id}).encode(),
+                       "application/json; charset=utf-8")
+
     def send_text(self, chat_id: int, text: str) -> None:
         body = json.dumps({"chat_id": chat_id, "text": text[:4096]}, ensure_ascii=False).encode("utf-8")
         self._post("sendMessage", body, "application/json; charset=utf-8")
@@ -231,12 +278,47 @@ def release_update(db, update_id: int) -> None:
 
 
 def process_update(db, update: object, config: TelegramConfig, now: int, api: TelegramBotAPI,
-                   report_writer) -> str:
+                   report_writer, db_path: Path | None = None) -> str:
     if not isinstance(update, dict):
         return "invalid"
     update_id = update.get("update_id")
     message = update.get("message")
-    if isinstance(update_id, bool) or not isinstance(update_id, int) or update_id < 0 or not isinstance(message, dict):
+    callback = update.get("callback_query")
+    if isinstance(update_id, bool) or not isinstance(update_id, int) or update_id < 0:
+        return "ignored"
+    if isinstance(callback, dict):
+        sender = callback.get("from")
+        callback_message = callback.get("message")
+        chat = callback_message.get("chat") if isinstance(callback_message, dict) else None
+        user_id = sender.get("id") if isinstance(sender, dict) else None
+        chat_id = chat.get("id") if isinstance(chat, dict) else None
+        if (isinstance(user_id, bool) or not isinstance(user_id, int) or user_id not in config.allowed_user_ids
+                or not isinstance(chat, dict) or chat.get("type") != "private" or chat_id != user_id):
+            return "unauthorized"
+        if not claim_update(db, update_id, now):
+            return "duplicate"
+        try:
+            api.answer_callback(callback.get("id", ""))
+            data = callback.get("data", "")
+            match = re.fullmatch(r"imp:([0-9a-f]{32}):([ynd])", data) if isinstance(data, str) else None
+            if not match or db_path is None:
+                api.send_text(chat_id, "Acțiunea nu este validă sau a expirat.")
+            else:
+                from telegram_documents import draft_preview, finish_draft
+                token, action = match.groups()
+                if action == "d":
+                    draft = draft_preview(token, user_id, now)
+                    api.send_text(chat_id, draft["details"] if draft else
+                                  "Cererea de import a expirat sau nu aparține contului tău.")
+                else:
+                    api.send_text(chat_id, finish_draft(db_path, token, user_id,
+                                                        confirm=action == "y", now=now))
+            complete_update(db, update_id)
+            return "processed"
+        except Exception:
+            release_update(db, update_id)
+            raise
+    if not isinstance(message, dict):
         return "ignored"
     sender = message.get("from")
     chat = message.get("chat")
@@ -248,11 +330,35 @@ def process_update(db, update: object, config: TelegramConfig, now: int, api: Te
             or chat.get("type") != "private" or chat_id != user_id):
         return "unauthorized"
     text = message.get("text")
-    if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+    document = message.get("document")
+    if not isinstance(text, str) and not isinstance(document, dict):
+        return "ignored"
+    if isinstance(text, str) and (not text.strip() or len(text) > 2000):
         return "ignored"
     if not claim_update(db, update_id, now):
         return "duplicate"
     try:
+        if isinstance(document, dict):
+            if db_path is None:
+                api.send_text(chat_id, "Importul documentelor nu este disponibil momentan.")
+            else:
+                from telegram_documents import analyze_document
+                file_id = document.get("file_id")
+                filename = document.get("file_name", "document")
+                if not isinstance(file_id, str) or not isinstance(filename, str):
+                    api.send_text(chat_id, "Documentul nu conține metadate valide.")
+                else:
+                    try:
+                        safe_name, content = api.download_document(file_id)
+                        token, summary, _details = analyze_document(user_id, filename or safe_name, content, now)
+                    except ValueError as exc:
+                        api.send_text(chat_id, f"Nu am salvat datele. {exc}")
+                    else:
+                        api.send_document_preview(chat_id,
+                            f"{summary}\n\nNu am salvat încă date în evidența financiară. Verifică rezumatul și confirmă importul; cererea expiră în 30 de minute.",
+                            token)
+            complete_update(db, update_id)
+            return "document_preview"
         answer, report_month = answer_message(db, text, now, config.allow_reports)
         if report_month:
             if not config.allow_reports:
@@ -267,7 +373,7 @@ def process_update(db, update: object, config: TelegramConfig, now: int, api: Te
             updated_at = latest_financial_update(db)
             freshness = (f"Ultima actualizare a datelor: {updated_at} UTC."
                          if updated_at else "Nu există încă importuri financiare în aplicație.")
-            api.send_text(chat_id, f"{answer}\\n\\n{freshness}")
+            api.send_text(chat_id, f"{answer}\n\n{freshness}")
         complete_update(db, update_id)
         return "processed"
     except Exception:
@@ -289,7 +395,7 @@ def set_webhook(config: TelegramConfig, public_url: str) -> None:
     origin = f"{parsed.scheme}://{parsed.netloc}"
     body = json.dumps({"url": origin + "/webhook/telegram",
                        "secret_token": config.webhook_secret,
-                       "allowed_updates": ["message"], "drop_pending_updates": False}).encode()
+                       "allowed_updates": ["message", "callback_query"], "drop_pending_updates": False}).encode()
     TelegramBotAPI(config)._post("setWebhook", body, "application/json")
 
 
