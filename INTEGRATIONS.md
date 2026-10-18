@@ -50,7 +50,7 @@ Handlerul validează secretul webhook-ului cu comparație constant-time, accept�
 
 ### Documente Telegram
 
-Webhook-ul se abonează la `message` și `callback_query`. Fișierele sunt descărcate numai după verificarea ID-ului numeric autorizat și a chatului privat. Limita locală este 10 MB. Se acceptă momentan Booking CSV, Creasoft CSV, MT940 și CSV/XLSX bancar care corespunde exact mapării explicite `DATA`, `DESCRIERE`, `SUMA` în RON. CSV-urile sunt validate împotriva parser-elor Booking și Creasoft înainte de maparea bancară; formatele necunoscute sunt respinse.
+Webhook-ul se abonează la `message` și `callback_query`. Fișierele sunt descărcate numai după verificarea ID-ului numeric autorizat și a chatului privat. Limita locală este 10 MB și 5.000 de rânduri. Se acceptă momentan Booking CSV, Creasoft CSV, MT940 și CSV/XLSX bancar care corespunde exact mapării explicite `DATA`, `DESCRIERE`, `SUMA` în RON. CSV-urile sunt validate împotriva parser-elor Booking și Creasoft înainte de maparea bancară; formatele necunoscute sunt respinse.
 
 Botul prezintă un rezumat și butoanele Confirmă / Anulează / Vezi detalii. Nicio înregistrare nu ajunge în registru înainte de confirmarea proprietarului. Datele parse-uite țin locul fișierului original într-un draft temporar din memoria procesului, cu expirare după 30 de minute; fișierele originale rămân doar într-un director temporar și sunt șterse la terminarea analizei. La restart, drafturile neconfirmate se pierd și documentul trebuie retrimis. Hash-ul documentului împiedică reimportul acelorași octeți; payout-urile Booking rămân neconfirmate până la reconcilierea cu extrasul manual.
 
