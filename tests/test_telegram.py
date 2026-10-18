@@ -194,7 +194,7 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(request.get_header("Content-type"), "application/json")
         payload = json.loads(request.data)
         self.assertEqual(payload["url"], "https://finance.example/webhook/telegram")
-        self.assertEqual(payload["allowed_updates"], ["message"])
+        self.assertEqual(payload["allowed_updates"], ["message", "callback_query"])
         self.assertEqual(payload["secret_token"], WEBHOOK_SECRET)
 
     def test_startup_can_register_webhook_only_when_explicitly_enabled(self):
