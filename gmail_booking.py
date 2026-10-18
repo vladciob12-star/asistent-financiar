@@ -110,12 +110,14 @@ def _attachment(part: dict, message_id: str, token: str) -> bytes | None:
     size = body.get("size")
     if not isinstance(size, int) or size < 0 or size > MAX_ATTACHMENT_BYTES:
         return None
-    encoded = body.get("data")
-    if not encoded and body.get("attachmentId"):
-        attachment_id = urllib.parse.quote(str(body["attachmentId"]), safe="")
-        msg = urllib.parse.quote(message_id, safe="")
-        response = _api_json(f"{GMAIL_API}/messages/{msg}/attachments/{attachment_id}", token)
-        encoded = response.get("data")
+    # Never request MIME body data in messages.get: use only the opaque
+    # attachment ID, then fetch bytes from the dedicated attachment endpoint.
+    if not isinstance(body.get("attachmentId"), str) or not body["attachmentId"]:
+        return None
+    attachment_id = urllib.parse.quote(body["attachmentId"], safe="")
+    msg = urllib.parse.quote(message_id, safe="")
+    response = _api_json(f"{GMAIL_API}/messages/{msg}/attachments/{attachment_id}", token)
+    encoded = response.get("data")
     if not isinstance(encoded, str):
         return None
     try:
@@ -179,7 +181,7 @@ def sync_booking_mail(db_path: Path, config: GmailBookingConfig) -> dict[str, in
         counts["messages_scanned"] += 1
         if _booking_sender(metadata):
             message = _api_json(
-                f"{GMAIL_API}/messages/{encoded_id}?format=full&fields=payload(parts(filename,mimeType,body(attachmentId,data,size),parts(filename,mimeType,body(attachmentId,data,size),parts(filename,mimeType,body(attachmentId,data,size),parts(filename,mimeType,body(attachmentId,data,size))))))",
+                f"{GMAIL_API}/messages/{encoded_id}?format=full&fields=payload(parts(filename,mimeType,body(attachmentId,size),parts(filename,mimeType,body(attachmentId,size),parts(filename,mimeType,body(attachmentId,size),parts(filename,mimeType,body(attachmentId,size))))))",
                 token,
             )
             for part in _parts(message.get("payload", {})):
