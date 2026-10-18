@@ -6,7 +6,7 @@ Nucleu local de import și registru financiar în dezvoltare. Datele rămân loc
 
 - Import Creasoft CSV cu antete validate și totaluri per automat. Raportul este păstrat ca agregat local; fără dată/perioadă explicită nu se deduce o perioadă.
 - Agregatele Creasoft pot fi scrise în SQLite cu `--import-creasoft-report`; aceleași bytes nu se importă din nou, etichetele necunoscute cer verificare, iar încasările cash + non-cash nu sunt prezentate ca numerar fizic.
-- Import CSV/XLSX pentru extrase și formate mapate explicit. Maparea cere antete, câmp de dată, sumă și monedă; tipul și activitatea pot rămâne neclasificate.
+- Import manual MT940 pentru extrase BT Go, fără mapare; pentru CSV/XLSX rămâne disponibilă maparea explicită. Tranzacțiile nu sunt clasificate automat.
 - Import CSV financiar Booking.com cu antete localizate, câmpuri brute/comision/taxe/net/plată separate, deduplicare de fișier și referințe rezervare pseudonimizate.
 - Registru SQLite local pentru observații, importuri, propuneri de reconciliere și raport HTML lunar; veniturile, cheltuielile și rezultatul estimat sunt separate pe monedă, fără conversii valutare implicite.
 - O plată Booking raportată rămâne neconfirmată în bancă până la potrivire și confirmare manuală. Ea nu este adunată la fondurile bancare.
@@ -24,7 +24,7 @@ Pornește interfața locală de import și raportare:
 python web_app.py --database data/finante.sqlite3
 ```
 
-Deschide `http://127.0.0.1:8765` în browser. Aplicația ascultă numai pe calculatorul local. În interfață poți încărca rapoarte Creasoft CSV, rapoarte financiare Booking CSV și extrase bancare CSV/XLSX cu o mapare JSON explicită. Fișierele originale sunt procesate local și nu sunt păstrate; registrul SQLite salvează datele normalizate, amprenta fișierului și proveniența rândurilor. Potrivirile sunt propuneri până la confirmarea manuală.
+Deschide `http://127.0.0.1:8765` în browser. Aplicația ascultă numai pe calculatorul local. În interfață poți încărca rapoarte Creasoft CSV, rapoarte financiare Booking CSV și extrase bancare BT Go MT940 (`.sta`, `.940`, `.mt940`); CSV/XLSX bancare folosesc o mapare JSON explicită. Fișierele originale sunt procesate local și nu sunt păstrate; registrul SQLite salvează datele normalizate, amprenta fișierului și proveniența rândurilor. Potrivirile sunt propuneri până la confirmarea manuală.
 
 Tabloul de bord însumează veniturile, cheltuielile și rezultatul estimat separat pe monede, fără conversii. Banii disponibili apar numai după introducerea manuală a unui sold și a datei din extras. Raportul lunar PDF se descarcă din interfață și este generat temporar pe dispozitiv.
 
@@ -58,7 +58,7 @@ Endpointul separat `/webhook/telegram` folosește Telegram Bot API prin webhook 
 
 `TELEGRAM_CONFIGURE_WEBHOOK_ON_START=true` cere aplicației să înregistreze automat callback-ul HTTPS din `APP_PUBLIC_URL` la pornire. `TELEGRAM_ALLOW_REPORTS=true` permite trimiterea unui PDF numai la comanda explicită `/raport AAAA-LL` sau „Trimite-mi raportul financiar lunar”. ID-urile update-urilor sunt deduplicate în SQLite; textul mesajelor, numele și ID-urile chatului nu se păstrează.
 
-Răspunsurile refolosesc agregatele SQLite și raportează clar când lipsesc date. Vânzările Creasoft fără perioadă sunt descrise drept vânzări raportate, nu numerar disponibil în tonomat. Booking neîncasat rămâne separat de banii disponibili. Telegram nu importă extrase bancare. Botul trebuie creat de proprietar prin @BotFather; tokenul și ID-ul numeric al proprietarului nu se publică și nu se comit. Codul nu pretinde că botul este conectat până când tokenul, ID-ul autorizat și webhook-ul nu sunt configurate și testate efectiv.
+Răspunsurile refolosesc agregatele SQLite și raportează clar când lipsesc date. Răspunsurile financiare includ momentul ultimei importări/salvări de sold (UTC), iar interogările despre ERA și Crișul identifică aparatele configurate. Vânzările Creasoft fără perioadă sunt descrise drept vânzări raportate, nu numerar disponibil în tonomat. Booking neîncasat rămâne separat de banii disponibili. Telegram nu importă extrase bancare. Botul trebuie creat de proprietar prin @BotFather; tokenul și ID-ul numeric al proprietarului nu se publică și nu se comit. Codul nu pretinde că botul este conectat până când tokenul, ID-ul autorizat și webhook-ul nu sunt configurate și testate efectiv.
 
 Exemplu de backup criptat, rulat pe instanța care poate accesa baza:
 
@@ -100,7 +100,7 @@ python -m unittest discover -s tests -v
 
 ## Limite și pașii rămași
 
-Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar necesită mapare și nu suportă PDF/OCR ori clasificare automată. WhatsApp, Creasoft API și Booking API nu sunt conectate. Hostingul este doar pregătit, nu activat. Snapshot-urile Render sunt automate în cazul unui deploy cu disc persistent; nu este configurată o copie criptată off-site.
+Creasoft importă în SQLite agregate, nu tranzacții pe zile; dacă exportul nu declară perioada, rândurile rămân în afara totalurilor lunare. Booking parserul acceptă formatul financiar localizat testat, dar încă nu suportă toate variantele/monedele/exporturile XLSX. Importul bancar MT940/CSV/XLSX este manual; PDF/OCR nu este suportat, iar tranzacțiile rămân neclasificate până la revizuire. Creasoft API, Booking API și citirea automată a e-mailului nu sunt conectate. WhatsApp, Creasoft API și Booking API nu sunt conectate. Hostingul este doar pregătit, nu activat. Snapshot-urile Render sunt automate în cazul unui deploy cu disc persistent; nu este configurată o copie criptată off-site.
 
 Rapoartele și fișierele financiare locale sunt excluse din Git prin `.gitignore`. Nu folosi date demonstrative drept tranzacții reale.
 

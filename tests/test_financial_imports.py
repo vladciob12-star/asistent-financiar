@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from financial_imports import FinancialRecord, export_records, import_csv, import_xlsx, load_mapping, monthly_totals
+from financial_imports import FinancialRecord, export_records, import_csv, import_mt940, import_xlsx, load_mapping, monthly_totals
 from main import citeste_raport, transforma_numar
 
 
@@ -139,6 +139,25 @@ class MappedCsvTests(unittest.TestCase):
         workbook.close()
         with self.assertRaisesRegex(ValueError,"antetul mapat"):
             import_xlsx(path,self.mapping)
+
+    def test_mt940_import_parses_synthetic_transactions_and_hashes_reference(self):
+        path = self.folder / "synthetic.sta"
+        path.write_text(":20:SYNTHETIC\n:25:ACCOUNT-REDACTED\n:60F:C261001RON1000,00\n"
+                        ":61:2610021002C100,50NTRFNONREF//SYNTH-REF-1\n:86:INCASARE TEST\n"
+                        ":61:261003D25,50NTRFNONREF//SYNTH-REF-2\n:86:PLATA TEST\n"
+                        ":62F:C261003RON1075,00\n", encoding="ascii")
+        rows = import_mt940(path)
+        self.assertEqual([(row.transaction_date, row.amount, row.currency) for row in rows], [
+            ("2026-10-02", "100.50", "RON"), ("2026-10-03", "-25.50", "RON")])
+        self.assertEqual(rows[0].description, "INCASARE TEST")
+        self.assertEqual(len(rows[0].external_id), 64)
+        self.assertNotIn("SYNTH-REF-1", rows[0].external_id)
+
+    def test_mt940_rejects_statement_without_currency(self):
+        path = self.folder / "missing-currency.sta"
+        path.write_text(":20:SYNTHETIC\n:61:261002C100,00NTRFNONREF\n", encoding="ascii")
+        with self.assertRaisesRegex(ValueError, "nu declară moneda"):
+            import_mt940(path)
 
     def test_cli_excel_import_exports_normalized_ledger(self):
         from openpyxl import Workbook
