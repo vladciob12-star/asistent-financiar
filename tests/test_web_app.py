@@ -97,10 +97,10 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT filename FROM imports").fetchone()[0], "synthetic-statement.csv")
 
     def test_manual_bt_go_mt940_import_needs_no_mapping_and_keeps_balance_separate(self):
-        content = (":20:SYNTHETIC\\n:25:ACCOUNT-REDACTED\\n:60F:C261001RON1000,00\\n"
-                   ":61:2610021002C100,50NTRFNONREF//SYNTH-REF-1\\n:86:INCASARE TEST\\n"
-                   ":61:261003D25,50NTRFNONREF//SYNTH-REF-2\\n:86:PLATA TEST\\n"
-                   ":62F:C261003RON1075,00\\n").encode("ascii")
+        content = (":20:SYNTHETIC\n:25:ACCOUNT-REDACTED\n:60F:C261001RON1000,00\n"
+                   ":61:2610021002C100,50NTRFNONREF//SYNTH-REF-1\n:86:INCASARE TEST\n"
+                   ":61:261003D25,50NTRFNONREF//SYNTH-REF-2\n:86:PLATA TEST\n"
+                   ":62F:C261003RON1075,00\n").encode("ascii")
         page = self.post("/import/bank", {"csrf": self.csrf, "month": "2026-10", "mapping": ""},
                          "synthetic.sta", content)
         self.assertIn("Extras bancar: importate 2 tranzacții", page)
