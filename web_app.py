@@ -650,7 +650,8 @@ class FinanceRequestHandler(BaseHTTPRequestHandler):
             api = TelegramBotAPI(config)
             from finance_store import write_monthly_pdf_report
             with closing(connect(self.server.db_path)) as db:
-                process_update(db, update, config, int(time.time()), api, write_monthly_pdf_report)
+                process_update(db, update, config, int(time.time()), api, write_monthly_pdf_report,
+                               self.server.db_path)
         except TelegramAPIError:
             self._send(502, "message delivery failed", "text/plain; charset=utf-8")
             return
@@ -768,6 +769,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
 

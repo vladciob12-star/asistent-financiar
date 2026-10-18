@@ -47,6 +47,15 @@ Configurarea Railway folosește aceste variabile secrete:
 
 Handlerul validează secretul webhook-ului cu comparație constant-time, acceptă doar chat privat în care `chat.id` este egal cu `from.id`, aplică allowlist-ul numeric și deduplică `update_id` în tabelul SQLite. Nu persistă textul, numele sau ID-ul de chat și nu loghează request-urile. Mesajele neautorizate primesc HTTP 200 fără răspuns financiar. Mesajele acceptate folosesc aceleași agregate și PDF-uri existente; nu importă fișiere și nu citește extrase bancare automat. Vânzările Creasoft fără perioadă sunt prezentate ca atare, niciodată ca sold fizic al aparatului. Plățile Booking neconfirmate sunt separate de fondurile disponibile. Răspunsurile financiare arată data ultimei importări/salvări de sold în UTC; întrebările despre ERA și Crișul identifică aparatele.
 
+
+### Documente Telegram
+
+Webhook-ul se abonează la `message` și `callback_query`. Fișierele sunt descărcate numai după verificarea ID-ului numeric autorizat și a chatului privat. Limita locală este 10 MB și 5.000 de rânduri. Se acceptă momentan Booking CSV, Creasoft CSV, MT940 și CSV/XLSX bancar care corespunde exact mapării explicite `DATA`, `DESCRIERE`, `SUMA` în RON. CSV-urile sunt validate împotriva parser-elor Booking și Creasoft înainte de maparea bancară; formatele necunoscute sunt respinse.
+
+Botul prezintă un rezumat și butoanele Confirmă / Anulează / Vezi detalii. Nicio înregistrare nu ajunge în registru înainte de confirmarea proprietarului. Datele parse-uite țin locul fișierului original într-un draft temporar din memoria procesului, cu expirare după 30 de minute; fișierele originale rămân doar într-un director temporar și sunt șterse la terminarea analizei. La restart, drafturile neconfirmate se pierd și documentul trebuie retrimis. Hash-ul documentului împiedică reimportul acelorași octeți; payout-urile Booking rămân neconfirmate până la reconcilierea cu extrasul manual.
+
+PDF-urile, fotografiile/bonurile, XLSX Creasoft/Booking și facturile nu sunt încă procesate: aplicația nu are un parser PDF/OCR local validat. Nu se folosesc servicii AI externe. Soldul bancar nu se deduce din rulaj; tranzacțiile bancare importate rămân neclasificate; vânzările Creasoft cash+non-cash nu stabilesc numerarul din aparate.
+
 Botul și conversația cu @BotFather trebuie create de proprietar; aplicația nu poate accesa identitatea sau tokenul Telegram fără acea configurare. Setarea webhook-ului de pornire și trimiterea mesajelor necesită conexiune la Telegram Bot API și pot consuma traficul inclus al serviciului Railway, fără un abonament Telegram separat. Nu este considerată conectată până când Telegram confirmă setWebhook și un mesaj real de la ID-ul autorizat primește răspuns.
 
 ## Creasoft
