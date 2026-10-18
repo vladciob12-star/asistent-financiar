@@ -41,6 +41,26 @@ def booking_csv_mixed_currencies():
     return output.getvalue().encode()
 
 
+def booking_csv_with_summary_totals():
+    content = booking_csv().decode()
+    reader = csv.DictReader(io.StringIO(content))
+    fields = list(reader.fieldnames)
+    reservation = next(reader)
+    reservation.update({HEADERS["gross"]: "975,00", HEADERS["commission"]: "-146,25",
+                        HEADERS["service_fee"]: "-9,75", HEADERS["vat"]: "0,00",
+                        HEADERS["tax"]: "0,00", HEADERS["net_payable"]: "819,00"})
+    payout = {field: "-" for field in fields}
+    payout.update({HEADERS["record_type"]: "(Payout)", HEADERS["reference"]: "FAKE-PAYOUT-1",
+                   HEADERS["issued_on"]: "05.09.2026", HEADERS["transaction_currency"]: "RON",
+                   HEADERS["payout_currency"]: "RON", HEADERS["payout_value"]: "667,80",
+                   HEADERS["payout_date"]: "05.09.2026"})
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows([reservation, payout])
+    return output.getvalue().encode()
+
+
 class TelegramDocumentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -84,14 +104,41 @@ class TelegramDocumentTests(unittest.TestCase):
 
     def test_booking_preview_never_combines_currencies(self):
         _, summary, _ = analyze_document(77, "mixed.csv", booking_csv_mixed_currencies(), now=4500)
-        self.assertIn("-2.00 EUR; -15.00 RON", summary)
-        self.assertIn("3.00 EUR", summary)
-        self.assertNotIn("3.00 RON", summary)
+        self.assertIn("15,00 lei", summary)
+        self.assertIn("3,00 euro", summary)
+        self.assertNotIn("3,00 lei", summary)
+
+    def test_booking_preview_uses_requested_order_and_clear_conclusion(self):
+        _, summary, details = analyze_document(77, "booking.csv", booking_csv_with_summary_totals(), now=4600)
+        expected = [
+            "- Total rezervări: 975,00 lei",
+            "- Comisioane Booking: 146,25 lei",
+            "- Alte taxe: 9,75 lei",
+            "- Net de primit: 819,00 lei",
+            "- Deja plătit de Booking: 667,80 lei",
+            "- Rămas de primit: 151,20 lei",
+        ]
+        positions = [summary.index(line) for line in expected]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("Concluzie: Booking mai are de plătit: 151,20 lei.", summary)
+        self.assertIn("nu sunt confirmate în bancă", summary)
+        self.assertTrue(details.startswith("Detalii Booking\n"))
+        self.assertIn("Booking indică o plată: 667,80 lei", details)
+
+    def test_confirmed_booking_import_keeps_short_title_and_preview(self):
+        token, _, _ = analyze_document(77, "booking.csv", booking_csv_with_summary_totals(), now=4700)
+        answer = finish_draft(self.db_path, token, 77, confirm=True, now=4701)
+        self.assertTrue(answer.startswith("Raport Booking\nImport confirmat:"))
+        self.assertIn("- Rămas de primit: 151,20 lei", answer)
+        self.assertEqual(answer.count("Raport Booking"), 1)
 
     def test_creasoft_csv_preview_notes_cash_and_period_limits(self):
         content = "Vendomat;Cantitate;Incasari totale (cash + non-cash - rest)\nOradea Era;3;45,00\n".encode()
         token, summary, _ = analyze_document(77, "creasoft.csv", content, now=5000)
-        self.assertIn("Numerarul și plățile non-cash sunt combinate", summary)
+        self.assertTrue(summary.startswith("Raport Creasoft\n"))
+        self.assertIn("Vânzări totale: 45,00 lei", summary)
+        self.assertIn("nu separă numerarul de plățile cu cardul", summary)
+        self.assertIn("Concluzie:", summary)
         with closing(connect(self.db_path)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM creasoft_reports").fetchone()[0], 0)
         self.assertIn("Import confirmat", finish_draft(self.db_path, token, 77, confirm=True, now=5001))

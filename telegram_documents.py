@@ -39,6 +39,88 @@ _BANK_MAPPING = {
     "delimiter": ";", "columns": {"date": "DATA", "description": "DESCRIERE", "amount": "SUMA"},
 }
 
+_CURRENCY_LABELS = {"RON": "lei", "EUR": "euro", "USD": "dolari"}
+
+
+def _money(value: Decimal | None, currency: str) -> str:
+    if value is None:
+        return "nu apare în raport"
+    formatted = f"{value:,.2f}".replace(",", "\0").replace(".", ",").replace("\0", ".")
+    return f"{formatted} {_CURRENCY_LABELS.get(currency, currency or 'monedă neprecizată')}"
+
+
+def _amounts_by_currency(rows: list[dict], field: str, currency_field: str,
+                         *, negate: bool = False) -> dict[str, Decimal]:
+    totals: dict[str, Decimal] = {}
+    for row in rows:
+        raw = row.get(field)
+        if raw is None or raw == "":
+            continue
+        currency = row.get(currency_field) or "monedă neprecizată"
+        amount = Decimal(raw)
+        totals[currency] = totals.get(currency, Decimal(0)) + (-amount if negate else amount)
+    return totals
+
+
+def _amount_label(totals: dict[str, Decimal], *, empty: str = "nu apare în raport") -> str:
+    if not totals:
+        return empty
+    return "; ".join(_money(amount, currency) for currency, amount in sorted(totals.items()))
+
+
+def _booking_preview(rows: list[dict]) -> tuple[str, str]:
+    reservations = [row for row in rows
+                    if row["record_type"].casefold().strip("() ") in {"rezervare", "reservation"}]
+    payouts = [row for row in rows
+               if row["record_type"].casefold().strip("() ") == "payout"]
+    gross = _amounts_by_currency(reservations, "gross", "transaction_currency")
+    commission = _amounts_by_currency(reservations, "commission", "transaction_currency", negate=True)
+    other_fees: dict[str, Decimal] = {}
+    for row in reservations:
+        currency = row.get("transaction_currency") or "monedă neprecizată"
+        fees = sum((Decimal(row[field]) for field in ("service_fee", "vat", "tax") if row.get(field)), Decimal(0))
+        other_fees[currency] = other_fees.get(currency, Decimal(0)) - fees
+    net = _amounts_by_currency(reservations, "net_payable", "transaction_currency")
+    paid = _amounts_by_currency(payouts, "payout_value", "payout_currency")
+    for currency in gross:
+        commission.setdefault(currency, Decimal(0))
+        other_fees.setdefault(currency, Decimal(0))
+    for currency in net:
+        paid.setdefault(currency, Decimal(0))
+    remaining = {currency: max(amount - paid.get(currency, Decimal(0)), Decimal(0))
+                 for currency, amount in net.items()}
+
+    summary = [
+        "Raport Booking",
+        f"- Total rezervări: {_amount_label(gross)}",
+        f"- Comisioane Booking: {_amount_label(commission, empty='0,00 lei')}",
+        f"- Alte taxe: {_amount_label(other_fees, empty='0,00 lei')}",
+        f"- Net de primit: {_amount_label(net)}",
+        f"- Deja plătit de Booking: {_amount_label(paid, empty='0,00 lei')}",
+        f"- Rămas de primit: {_amount_label(remaining)}",
+    ]
+    if remaining:
+        conclusion = f"Booking mai are de plătit: {_amount_label(remaining)}."
+    else:
+        conclusion = "Nu pot calcula suma rămasă de primit din acest raport."
+    summary.extend(["", f"Concluzie: {conclusion}", "", "Atenție: plățile din raportul Booking nu sunt confirmate în bancă până nu apar în extras."])
+
+    details = ["Detalii Booking"]
+    for row in reservations[:30]:
+        currency = row.get("transaction_currency") or "monedă neprecizată"
+        commission_value = Decimal(row["commission"]) if row.get("commission") else None
+        fees = sum((Decimal(row[field]) for field in ("service_fee", "vat", "tax") if row.get(field)), Decimal(0))
+        details.append(
+            f"- Rezervare: brut {_money(Decimal(row['gross']) if row.get('gross') else None, currency)} · "
+            f"comision {_money(-commission_value if commission_value is not None else None, currency)} · "
+            f"alte taxe {_money(-fees, currency)} · net {_money(Decimal(row['net_payable']) if row.get('net_payable') else None, currency)}"
+        )
+    for row in payouts[:30]:
+        currency = row.get("payout_currency") or "monedă neprecizată"
+        when = row.get("payout_date") or "dată neprecizată"
+        details.append(f"- Booking indică o plată: {_money(Decimal(row['payout_value']) if row.get('payout_value') else None, currency)} · {when} · neconfirmată în bancă")
+    return "\n".join(summary), "\n".join(details)
+
 
 def _store_draft(user_id: int, kind: str, digest: str, rows: list[dict],
                  summary: str, details: str, now: int) -> str:
@@ -92,26 +174,7 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
                 records = import_booking_csv(path)
                 rows = [asdict(record) for record in records]
                 _check_rows(rows)
-                payout_rows = [row for row in rows if row["record_type"].casefold().strip("() ") == "payout"]
-                commission_totals: dict[str, Decimal] = {}
-                for row in rows:
-                    if row["commission"] is not None:
-                        currency = row["transaction_currency"] or "monedă lipsă"
-                        commission_totals[currency] = commission_totals.get(currency, Decimal(0)) + Decimal(row["commission"])
-                payout_totals: dict[str, Decimal] = {}
-                for row in payout_rows:
-                    if row["payout_value"] is not None:
-                        currency = row["payout_currency"] or "monedă lipsă"
-                        payout_totals[currency] = payout_totals.get(currency, Decimal(0)) + Decimal(row["payout_value"])
-                commission_text = "; ".join(f"{amount:.2f} {currency}" for currency, amount in sorted(commission_totals.items())) or "—"
-                payout_text = "; ".join(f"{amount:.2f} {currency}" for currency, amount in sorted(payout_totals.items())) or "—"
-                summary = (f"Raport Booking CSV: {len(rows)} rânduri; comisioane raportate {commission_text}; "
-                           f"plăți raportate {payout_text}. Plățile nu sunt confirmate ca încasate în bancă.")
-                details = "\n".join(
-                    f"Rând {r['source_row']}: {r['record_type']}; brut {r['gross'] or '—'} {r['transaction_currency']}; "
-                    f"comision {r['commission'] or '—'}; net de plată {r['net_payable'] or '—'}; "
-                    f"plată raportată {r['payout_value'] or '—'} {r['payout_currency']}"
-                    for r in rows[:30])
+                summary, details = _booking_preview(rows)
                 return _store_draft(user_id, "booking", digest, rows, summary, details, now), summary, details
             except ValueError:
                 pass
@@ -121,9 +184,14 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
                          "sales": str(values["incasari"])} for label, values in aggregates.items()]
                 _check_rows(rows)
                 total = sum((Decimal(row["sales"]) for row in rows), Decimal(0))
-                summary = (f"Raport Creasoft CSV: {len(rows)} aparate/etichete, vânzări raportate {total:.2f} RON. "
-                           "Numerarul și plățile non-cash sunt combinate; perioada și soldul fizic nu sunt deduse.")
-                details = "\n".join(f"{r['label']}: {r['quantity']} produse, {Decimal(r['sales']):.2f} RON" for r in rows[:30])
+                sales_text = _money(total, "RON")
+                summary = (f"Raport Creasoft\n- Aparate raportate: {len(rows)}\n- Vânzări totale: {sales_text}\n\n"
+                           "Observații:\n- Raportul nu separă numerarul de plățile cu cardul.\n"
+                           "- Nu arată câți bani au rămas în aparate.\n\n"
+                           f"Concluzie: Vânzări raportate de {sales_text}.")
+                details = "Detalii aparate\n" + "\n".join(
+                    f"- {r['label']}: {r['quantity']} produse · {_money(Decimal(r['sales']), 'RON')} vânzări"
+                    for r in rows[:30])
                 return _store_draft(user_id, "creasoft", digest, rows, summary, details, now), summary, details
             except ValueError:
                 pass
@@ -158,10 +226,13 @@ def analyze_document(user_id: int, filename: str, content: bytes, now: int | Non
         row["source_file"] = "telegram-document"
     credits = sum((Decimal(row["amount"]) for row in rows if Decimal(row["amount"]) > 0), Decimal(0))
     debits = sum((Decimal(row["amount"]) for row in rows if Decimal(row["amount"]) < 0), Decimal(0))
-    summary = (f"Extras bancar: {len(rows)} tranzacții; {sum(1 for row in rows if Decimal(row['amount']) > 0)} încasări "
-               f"({credits:.2f} total), {sum(1 for row in rows if Decimal(row['amount']) < 0)} plăți ({abs(debits):.2f} total). "
-               "Tranzacțiile rămân neclasificate, iar soldul nu este calculat din rulaj.")
-    details = "\n".join(f"{r['transaction_date']}: {r['description'][:120]} — {r['amount']} {r['currency']}" for r in rows[:30])
+    summary = (f"Extras bancar\n- Tranzacții: {len(rows)}\n"
+               f"- Încasări: {sum(1 for row in rows if Decimal(row['amount']) > 0)} · {_money(credits, 'RON')}\n"
+               f"- Plăți: {sum(1 for row in rows if Decimal(row['amount']) < 0)} · {_money(abs(debits), 'RON')}\n\n"
+               "Concluzie: Acestea sunt mișcările din extras; soldul se citește separat din extras.")
+    details = "Detalii tranzacții\n" + "\n".join(
+        f"- {r['transaction_date']}: {r['description'][:100]} · {_money(Decimal(r['amount']), r['currency'])}"
+        for r in rows[:30])
     return _store_draft(user_id, "bank", digest, rows, summary, details, now), summary, details
 
 
@@ -189,14 +260,12 @@ def finish_draft(db_path: Path, token: str, user_id: int, *, confirm: bool,
             with db:
                 _, count = import_booking_records(db, "telegram-booking.csv", None,
                     [BookingRecord(**row) for row in draft["rows"]], content_sha256=draft["digest"])
-            noun = "rânduri Booking"
         elif draft["kind"] == "creasoft":
             aggregates = {row["label"]: {"cantitate": Decimal(row["quantity"]), "incasari": Decimal(row["sales"])}
                          for row in draft["rows"]}
             with db:
                 _, count = import_creasoft_report(db, "telegram-creasoft.csv", None, aggregates,
                                                    content_sha256=draft["digest"])
-            noun = "agregate Creasoft"
         else:
             observations = [Observation(
                 source=row["source"], occurred_on=row["transaction_date"], description=row["description"],
@@ -207,10 +276,15 @@ def finish_draft(db_path: Path, token: str, user_id: int, *, confirm: bool,
             with db:
                 _, count = import_observations(db, "telegram-bank-statement", None, observations,
                                                content_sha256=draft["digest"])
-            noun = "tranzacții bancare"
     with _DRAFT_LOCK:
         _DRAFTS.pop(token, None)
     if count == 0:
-        return "Documentul a fost deja importat; nu am creat înregistrări duplicate."
-    return f"Import confirmat: {count} {noun}. Tranzacțiile rămân neclasificate unde nu există o clasificare explicită; plățile Booking nu sunt încasări bancare confirmate."
+        title = {"booking": "Raport Booking", "creasoft": "Raport Creasoft", "bank": "Extras bancar"}[draft["kind"]]
+        return f"{title}\nAcest document fusese deja importat. Nu am adăugat duplicate."
+    title = {"booking": "Raport Booking", "creasoft": "Raport Creasoft", "bank": "Extras bancar"}[draft["kind"]]
+    imported = {"booking": f"Import confirmat: {count} rezervări/plăți.",
+                "creasoft": f"Import confirmat: {count} aparate.",
+                "bank": f"Import confirmat: {count} tranzacții."}[draft["kind"]]
+    summary_body = draft["summary"].partition("\n")[2]
+    return f"{title}\n{imported}\n\n{summary_body}"
 
